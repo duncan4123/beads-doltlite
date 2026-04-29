@@ -1101,11 +1101,12 @@ var rootCmd = &cobra.Command{
 			}
 		}
 
-		// Auto-backup: export JSONL to .beads/backup/ if enabled and due
-		maybeAutoBackup(rootCtx)
-
-		// Auto-export: write git-tracked JSONL for portability if enabled and due
-		maybeAutoExport(rootCtx)
+		// Auto-backup/export write JSONL and may run git operations. Keep read-only
+		// commands like list/show/status as pure reads.
+		if !isReadOnlyCommand(cmd.Name()) {
+			maybeAutoBackup(rootCtx)
+			maybeAutoExport(rootCtx)
+		}
 
 		// Auto-push: push to Dolt remote if enabled and due.
 		// Skip for read-only commands to avoid unnecessary network operations

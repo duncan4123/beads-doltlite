@@ -27,6 +27,10 @@ var (
 // string and IssueFilter. The tables parameter controls which table names are
 // referenced in subqueries (issues vs wisps).
 func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables FilterTables) ([]string, []interface{}, error) {
+	return BuildIssueFilterClausesWithDialect(query, filter, tables, SQLDialectDolt)
+}
+
+func BuildIssueFilterClausesWithDialect(query string, filter types.IssueFilter, tables FilterTables, dialect SQLDialect) ([]string, []interface{}, error) {
 	var whereClauses []string
 	var args []interface{}
 
@@ -270,7 +274,7 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 		if err := storage.ValidateMetadataKey(filter.HasMetadataKey); err != nil {
 			return nil, nil, err
 		}
-		whereClauses = append(whereClauses, "JSON_EXTRACT(metadata, ?) IS NOT NULL")
+		whereClauses = append(whereClauses, dialect.MetadataExistsExpr())
 		args = append(args, storage.JSONMetadataPath(filter.HasMetadataKey))
 	}
 	if len(filter.MetadataFields) > 0 {
@@ -283,7 +287,7 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 			if err := storage.ValidateMetadataKey(k); err != nil {
 				return nil, nil, err
 			}
-			whereClauses = append(whereClauses, "JSON_UNQUOTE(JSON_EXTRACT(metadata, ?)) = ?")
+			whereClauses = append(whereClauses, dialect.MetadataEqualsExpr())
 			args = append(args, storage.JSONMetadataPath(k), filter.MetadataFields[k])
 		}
 	}

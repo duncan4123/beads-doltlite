@@ -22,6 +22,16 @@ func GetReadyWorkInTx(
 	filter types.WorkFilter,
 	computeBlockedFn func(ctx context.Context, tx *sql.Tx, includeWisps bool) ([]string, error),
 ) ([]*types.Issue, error) {
+	return GetReadyWorkInTxWithDialect(ctx, tx, filter, computeBlockedFn, SQLDialectDolt)
+}
+
+func GetReadyWorkInTxWithDialect(
+	ctx context.Context,
+	tx *sql.Tx,
+	filter types.WorkFilter,
+	computeBlockedFn func(ctx context.Context, tx *sql.Tx, includeWisps bool) ([]string, error),
+	dialect SQLDialect,
+) ([]*types.Issue, error) {
 	// Status filtering: default to open OR in_progress.
 	var statusClause string
 	if filter.Status != "" {
@@ -79,11 +89,11 @@ func GetReadyWorkInTx(
 	}
 	// Exclude future-deferred issues unless IncludeDeferred is set.
 	if !filter.IncludeDeferred {
-		whereClauses = append(whereClauses, "(defer_until IS NULL OR defer_until <= UTC_TIMESTAMP())")
+		whereClauses = append(whereClauses, "(defer_until IS NULL OR defer_until <= "+dialect.CurrentTimestamp()+")")
 	}
 	// Exclude children of future-deferred parents.
 	if !filter.IncludeDeferred {
-		deferredChildIDs, dcErr := getChildrenOfDeferredParentsInTx(ctx, tx)
+		deferredChildIDs, dcErr := getChildrenOfDeferredParentsInTx(ctx, tx, dialect)
 		if dcErr == nil && len(deferredChildIDs) > 0 {
 			for start := 0; start < len(deferredChildIDs); start += queryBatchSize {
 				end := start + queryBatchSize
@@ -120,7 +130,7 @@ func GetReadyWorkInTx(
 		if descErr != nil {
 			return nil, fmt.Errorf("get parent descendants: %w", descErr)
 		}
-		parentClauses := []string{"(id LIKE CONCAT(?, '.%') AND id NOT IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child'))"}
+		parentClauses := []string{"(" + dialect.ChildIDLikeExpr() + " AND id NOT IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child'))"}
 		args = append(args, parentID)
 		for start := 0; start < len(descendantIDs); start += queryBatchSize {
 			end := start + queryBatchSize
@@ -136,7 +146,7 @@ func GetReadyWorkInTx(
 
 	// Molecule filtering: filter to direct children of the specified molecule.
 	if filter.MoleculeID != "" {
-		whereClauses = append(whereClauses, "(id IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child' AND depends_on_id = ?) OR (id LIKE CONCAT(?, '.%') AND id NOT IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child')))")
+		whereClauses = append(whereClauses, "(id IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child' AND depends_on_id = ?) OR ("+dialect.ChildIDLikeExpr()+" AND id NOT IN (SELECT issue_id FROM dependencies WHERE type = 'parent-child')))")
 		args = append(args, filter.MoleculeID, filter.MoleculeID)
 	}
 
@@ -145,7 +155,7 @@ func GetReadyWorkInTx(
 		if err := storage.ValidateMetadataKey(filter.HasMetadataKey); err != nil {
 			return nil, err
 		}
-		whereClauses = append(whereClauses, "JSON_EXTRACT(metadata, ?) IS NOT NULL")
+		whereClauses = append(whereClauses, dialect.MetadataExistsExpr())
 		args = append(args, "$."+filter.HasMetadataKey)
 	}
 
@@ -160,7 +170,7 @@ func GetReadyWorkInTx(
 			if err := storage.ValidateMetadataKey(k); err != nil {
 				return nil, err
 			}
-			whereClauses = append(whereClauses, "JSON_UNQUOTE(JSON_EXTRACT(metadata, ?)) = ?")
+			whereClauses = append(whereClauses, dialect.MetadataEqualsExpr())
 			args = append(args, storage.JSONMetadataPath(k), filter.MetadataFields[k])
 		}
 	}
@@ -200,9 +210,10 @@ func GetReadyWorkInTx(
 	case types.SortPolicyPriority:
 		orderBySQL = "ORDER BY priority ASC, created_at DESC, id ASC"
 	case types.SortPolicyHybrid, "":
+		recentCreatedAt := dialect.RecentCreatedAtExpr()
 		orderBySQL = `ORDER BY
-			CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 48 HOUR) THEN 0 ELSE 1 END ASC,
-			CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 48 HOUR) THEN priority ELSE 999 END ASC,
+			CASE WHEN created_at >= ` + recentCreatedAt + ` THEN 0 ELSE 1 END ASC,
+			CASE WHEN created_at >= ` + recentCreatedAt + ` THEN priority ELSE 999 END ASC,
 			created_at ASC, id ASC`
 	default:
 		orderBySQL = "ORDER BY priority ASC, created_at DESC, id ASC"
@@ -260,7 +271,7 @@ func GetReadyWorkInTx(
 			s := filter.Status
 			wispFilter.Status = &s
 		}
-		wisps, wErr := SearchIssuesInTx(ctx, tx, "", wispFilter)
+		wisps, wErr := SearchIssuesInTxWithDialect(ctx, tx, "", wispFilter, dialect)
 		if wErr == nil {
 			ordered = append(ordered, wisps...)
 		}
@@ -271,12 +282,13 @@ func GetReadyWorkInTx(
 
 // getChildrenOfDeferredParentsInTx returns IDs of issues whose parent has a
 // future defer_until. Works within an existing transaction.
-func getChildrenOfDeferredParentsInTx(ctx context.Context, tx *sql.Tx) ([]string, error) {
+func getChildrenOfDeferredParentsInTx(ctx context.Context, tx *sql.Tx, dialect SQLDialect) ([]string, error) {
 	// Step 1: Get IDs of issues with future defer_until.
-	deferredRows, err := tx.QueryContext(ctx, `
+	query := `
 		SELECT id FROM issues
-		WHERE defer_until IS NOT NULL AND defer_until > UTC_TIMESTAMP()
-	`)
+		WHERE defer_until IS NOT NULL AND defer_until > ` + dialect.CurrentTimestamp() + `
+	`
+	deferredRows, err := tx.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("deferred parents: get deferred issues: %w", err)
 	}

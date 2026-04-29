@@ -13,9 +13,13 @@ import (
 // It queries the issues table, optionally merges wisps, and returns hydrated issues
 // with labels populated.
 func SearchIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter) ([]*types.Issue, error) {
+	return SearchIssuesInTxWithDialect(ctx, tx, query, filter, SQLDialectDolt)
+}
+
+func SearchIssuesInTxWithDialect(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, dialect SQLDialect) ([]*types.Issue, error) {
 	// Route ephemeral-only queries to wisps table.
 	if filter.Ephemeral != nil && *filter.Ephemeral {
-		results, err := searchTableInTx(ctx, tx, query, filter, WispsFilterTables)
+		results, err := searchTableInTx(ctx, tx, query, filter, WispsFilterTables, dialect)
 		if err != nil && !isTableNotExistError(err) {
 			return nil, fmt.Errorf("search wisps (ephemeral filter): %w", err)
 		}
@@ -25,7 +29,7 @@ func SearchIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter type
 		// Fall through: wisps table doesn't exist or returned no results
 	}
 
-	results, err := searchTableInTx(ctx, tx, query, filter, IssuesFilterTables)
+	results, err := searchTableInTx(ctx, tx, query, filter, IssuesFilterTables, dialect)
 	if err != nil {
 		return nil, fmt.Errorf("search issues: %w", err)
 	}
@@ -33,7 +37,7 @@ func SearchIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter type
 	// When filter.Ephemeral is nil (search everything), also search the wisps
 	// table and merge results.
 	if filter.Ephemeral == nil {
-		wispResults, wispErr := searchTableInTx(ctx, tx, query, filter, WispsFilterTables)
+		wispResults, wispErr := searchTableInTx(ctx, tx, query, filter, WispsFilterTables, dialect)
 		if wispErr != nil && !isTableNotExistError(wispErr) {
 			return nil, fmt.Errorf("search wisps (merge): %w", wispErr)
 		}
@@ -54,8 +58,8 @@ func SearchIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter type
 }
 
 // searchTableInTx runs a filtered search against a specific table set (issues or wisps).
-func searchTableInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables) ([]*types.Issue, error) {
-	whereClauses, args, err := BuildIssueFilterClauses(query, filter, tables)
+func searchTableInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables, dialect SQLDialect) ([]*types.Issue, error) {
+	whereClauses, args, err := BuildIssueFilterClausesWithDialect(query, filter, tables, dialect)
 	if err != nil {
 		return nil, err
 	}
