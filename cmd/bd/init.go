@@ -103,9 +103,10 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		sharedServer, _ := cmd.Flags().GetBool("shared-server")
 		externalServer, _ := cmd.Flags().GetBool("external")
 
-		// Handle --backend flag: "dolt" is the only supported backend.
-		// "sqlite" is accepted for backward compatibility but prints a
-		// deprecation notice and exits with an error.
+		// Handle --backend flag. Dolt remains the default; doltlite is an
+		// explicit local backend for environments that do not want a Dolt
+		// sql-server lifecycle.
+		backend := configfile.BackendDolt
 		if backendFlag == "sqlite" {
 			fmt.Fprintf(os.Stderr, "%s The SQLite backend has been removed.\n\n", ui.RenderWarn("⚠ DEPRECATED:"))
 			fmt.Fprintf(os.Stderr, "Dolt is now the default (and only) storage backend for beads.\n")
@@ -115,8 +116,17 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			fmt.Fprintf(os.Stderr, "  bd init --from-jsonl\n\n")
 			fmt.Fprintf(os.Stderr, "See: https://github.com/steveyegge/beads/blob/main/docs/DOLT-BACKEND.md\n")
 			os.Exit(1)
-		} else if backendFlag != "" && backendFlag != "dolt" {
-			FatalError("unknown backend %q: only \"dolt\" is supported", backendFlag)
+		} else if backendFlag == configfile.BackendDoltlite {
+			backend = configfile.BackendDoltlite
+		} else if backendFlag != "" && backendFlag != configfile.BackendDolt {
+			FatalError("unknown backend %q: supported backends are \"dolt\" and \"doltlite\"", backendFlag)
+		}
+		useDoltlite := backend == configfile.BackendDoltlite
+		if useDoltlite && (initServerMode || sharedServer || externalServer) {
+			FatalError("--backend=doltlite is local-only and cannot be combined with --server, --shared-server, or --external")
+		}
+		if useDoltlite && initRemoteChanged && initRemote != "" {
+			FatalError("--backend=doltlite does not support Dolt remote bootstrap")
 		}
 
 		// Validate --database format early, before any side effects.
@@ -148,11 +158,8 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			FatalError("--team requires interactive prompts and cannot be used with --non-interactive")
 		}
 
-		// Dolt is the only supported backend
-		backend := configfile.BackendDolt
-
 		// Also treat BEADS_DOLT_SERVER_MODE=1 env var as --server.
-		if os.Getenv("BEADS_DOLT_SERVER_MODE") == "1" {
+		if !useDoltlite && os.Getenv("BEADS_DOLT_SERVER_MODE") == "1" {
 			initServerMode = true
 		}
 
@@ -160,7 +167,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// the server-backed store path during init. Without this, init can
 		// persist shared-server intent in YAML while still creating an embedded
 		// store and recording dolt_mode=embedded in metadata.json (GH#2946).
-		if sharedServer || strings.EqualFold(os.Getenv("BEADS_DOLT_SHARED_SERVER"), "true") || os.Getenv("BEADS_DOLT_SHARED_SERVER") == "1" {
+		if !useDoltlite && (sharedServer || strings.EqualFold(os.Getenv("BEADS_DOLT_SHARED_SERVER"), "true") || os.Getenv("BEADS_DOLT_SHARED_SERVER") == "1") {
 			initServerMode = true
 		}
 
@@ -182,7 +189,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// Reject hyphens in --database for embedded mode. Must run AFTER
 		// serverMode is set above — otherwise isEmbeddedMode() always returns
 		// true and incorrectly rejects server-mode names (GH#3231).
-		if database != "" && strings.ContainsRune(database, '-') && isEmbeddedMode() {
+		if database != "" && strings.ContainsRune(database, '-') && (isEmbeddedMode() || useDoltlite) {
 			FatalError("database name %q contains hyphens which are invalid in embedded mode; use underscores instead (e.g. %q)",
 				database, sanitizeDBName(database))
 		}
@@ -321,7 +328,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 					earlyRemoteHasDoltData = gitOriginHasDoltDataRef()
 				}
 			}
-			if earlySyncURL != "" {
+			if !useDoltlite && earlySyncURL != "" {
 				earlyDecision := CheckRemoteSafety(RemoteSafetyInput{
 					Force:             force,
 					ReinitLocal:       reinitLocal,
@@ -575,7 +582,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		syncFromRemote := false
 		remoteHasDoltData := false
 
-		if syncURL != "" {
+		if !useDoltlite && syncURL != "" {
 			// sync.remote was explicitly configured. Treat as bootstrap-
 			// from-remote intent; CheckRemoteSafety still enforces that
 			// --force/--reinit-local can't silently fight that intent.
@@ -583,7 +590,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			// http:// to git+http:// and break Dolt remotesapi endpoints
 			// configured explicitly by the user (GH#3339).
 			syncFromRemote = true
-		} else if syncRemoteSource == initSyncRemoteNone && isGitRepo() && !isBareGitRepo() {
+		} else if !useDoltlite && syncRemoteSource == initSyncRemoteNone && isGitRepo() && !isBareGitRepo() {
 			if originURL, err := gitOriginGetURL(); err == nil && originURL != "" {
 				syncURL = normalizeRemoteURL(originURL)
 				remoteHasDoltData = gitOriginHasDoltDataRef()
@@ -635,7 +642,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 				}
 			}
 		}
-		if syncFromRemote {
+		if !useDoltlite && syncFromRemote {
 			var err error
 			cloneCfg := initTimeCloneConfig(initServerMode, serverHost, serverPort, serverSocket, serverUser, dbName)
 			err = cloneFromRemoteWithMode(ctx, beadsDir, syncURL, dbName, cloneCfg, initRemoteCloneMode(initServerMode, externalServer))
@@ -700,10 +707,13 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			doltCfg.ServerUser = serverUser
 		}
 
-		initLock, err := acquireEmbeddedLock(beadsDir, initServerMode)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+		var initLock embeddeddolt.Unlocker = embeddeddolt.NoopLock{}
+		if !useDoltlite {
+			initLock, err = acquireEmbeddedLock(beadsDir, initServerMode)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 		}
 		defer initLock.Unlock()
 
@@ -755,16 +765,21 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
-		store, err := newDoltStore(ctx, doltCfg, embeddeddolt.WithLock(initLock))
+		var store storage.DoltStorage
+		if useDoltlite {
+			store, err = newDoltliteStore(ctx, beadsDir, dbName)
+		} else {
+			store, err = newDoltStore(ctx, doltCfg, embeddeddolt.WithLock(initLock))
+		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: failed to open Dolt store: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error: failed to open %s store: %v\n", backend, err)
 			os.Exit(1)
 		}
 
 		// Initialize global database schema and config in shared-server mode.
 		// Opens a separate store connection to beads_global with CreateIfMissing
 		// to trigger schema migration, then seeds the issue prefix and project ID.
-		if sharedServer || doltserver.IsSharedServerMode() {
+		if !useDoltlite && (sharedServer || doltserver.IsSharedServerMode()) {
 			initGlobalDatabaseConfig(ctx, doltCfg, quiet)
 		}
 
@@ -775,7 +790,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// git origin URLs for plain source repos must NOT be registered —
 		// they cause every Dolt fetch to fail and leak tmp_pack_* files
 		// that can consume 100+ GB of disk space (GH#3354, GH#3356).
-		if shouldWireInitRemote(syncURL, syncFromRemote, syncURLFromConfig) {
+		if !useDoltlite && shouldWireInitRemote(syncURL, syncFromRemote, syncURLFromConfig) {
 			hasRemote, _ := store.HasRemote(ctx, "origin")
 			if !hasRemote {
 				if err := store.AddRemote(ctx, "origin", syncURL); err != nil {
@@ -795,7 +810,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// Set the issue prefix in config (only if not already configured —
 		// avoid clobbering when multiple rigs share the same Dolt database)
 		existing, _ := store.GetConfig(ctx, "issue_prefix")
-		if existing == "" {
+		if existing == "" || useDoltlite {
 			// Sanitize dots to underscores so issue IDs (e.g. "GPUPolynomials_jl-1")
 			// remain valid identifiers. Must match DoltDatabase sanitization above.
 			issuePrefix := strings.ReplaceAll(prefix, ".", "_")
@@ -884,6 +899,15 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 
 			// Always store backend explicitly in metadata.json
 			cfg.Backend = backend
+			if backend == configfile.BackendDoltlite {
+				cfg.Database = "doltlite"
+				if database != "" {
+					cfg.DoltDatabase = database
+				} else if cfg.DoltDatabase == "" && prefix != "" {
+					cfg.DoltDatabase = strings.ReplaceAll(prefix, "-", "_")
+				}
+				cfg.DoltMode = configfile.DoltModeEmbedded
+			}
 			// Metadata.json.database should point to the Dolt directory (not beads.db).
 			// Backward-compat: older dolt setups left this as "beads.db", which is misleading.
 			if backend == configfile.BackendDolt {
@@ -1424,8 +1448,8 @@ func init() {
 	initCmd.Flags().Bool("non-interactive", false, "Skip all interactive prompts (auto-detected in CI or non-TTY environments)")
 	initCmd.Flags().String("role", "", "Set beads role without prompting: \"maintainer\" or \"contributor\"")
 
-	// Backend selection (dolt is the only supported backend; sqlite accepted for deprecation notice)
-	initCmd.Flags().String("backend", "", "Storage backend (default: dolt). --backend=sqlite prints deprecation notice.")
+	// Backend selection (dolt is the default; sqlite accepted for deprecation notice)
+	initCmd.Flags().String("backend", "", "Storage backend (dolt|doltlite; default: dolt). --backend=sqlite prints deprecation notice.")
 
 	// Dolt server connection flags
 	initCmd.Flags().Bool("server", false, "Use external dolt sql-server instead of embedded engine")

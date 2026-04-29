@@ -45,7 +45,14 @@ func newDoltStore(ctx context.Context, cfg *dolt.Config, opts ...embeddeddolt.Op
 	if cfg.ServerMode {
 		return dolt.New(ctx, cfg)
 	}
-	return doltlite.New(ctx, cfg.BeadsDir, cfg.Database, "main")
+	return embeddeddolt.New(ctx, cfg.BeadsDir, cfg.Database, "main", opts...)
+}
+
+func newDoltliteStore(ctx context.Context, beadsDir, database string) (storage.DoltStorage, error) {
+	if database == "" {
+		database = configfile.DefaultDoltDatabase
+	}
+	return doltlite.New(ctx, beadsDir, database, "main")
 }
 
 // acquireEmbeddedLock acquires an exclusive flock on the embeddeddolt data
@@ -56,7 +63,8 @@ func acquireEmbeddedLock(beadsDir string, serverMode bool) (embeddeddolt.Unlocke
 	if serverMode {
 		return embeddeddolt.NoopLock{}, nil
 	}
-	return embeddeddolt.NoopLock{}, nil
+	dataDir := filepath.Join(beadsDir, "embeddeddolt")
+	return embeddeddolt.TryLock(dataDir)
 }
 
 // newDoltStoreFromConfig creates a storage backend from the beads directory's
@@ -67,6 +75,9 @@ func acquireEmbeddedLock(beadsDir string, serverMode bool) (embeddeddolt.Unlocke
 // auto-sanitized to underscores and the fix is persisted to metadata.json.
 func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		return newDoltliteStore(ctx, beadsDir, cfg.GetDoltDatabase())
+	}
 	if err == nil && cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfig(ctx, beadsDir)
 	}
@@ -80,7 +91,7 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltS
 		}
 		database = sanitized
 	}
-	return doltlite.New(ctx, beadsDir, database, "main")
+	return embeddeddolt.New(ctx, beadsDir, database, "main")
 }
 
 // migrateHyphenatedDB renames a legacy hyphenated database directory and
@@ -131,6 +142,9 @@ func migrateHyphenatedDB(beadsDir string, cfg *configfile.Config, oldName, newNa
 // hydration from mutating foreign projects (GH#3231).
 func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		return newDoltliteStore(ctx, beadsDir, cfg.GetDoltDatabase())
+	}
 	if err == nil && cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfigWithOptions(ctx, beadsDir, &dolt.Config{ReadOnly: true})
 	}
@@ -141,5 +155,5 @@ func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.D
 	if sanitized := sanitizeDBName(database); sanitized != database {
 		database = sanitized
 	}
-	return doltlite.New(ctx, beadsDir, database, "main")
+	return embeddeddolt.New(ctx, beadsDir, database, "main")
 }

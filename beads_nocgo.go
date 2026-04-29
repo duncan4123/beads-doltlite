@@ -18,6 +18,9 @@ import (
 // beadsDir is the path to the .beads directory.
 func OpenBestAvailable(ctx context.Context, beadsDir string) (Storage, embeddeddolt.Unlocker, error) {
 	cfg, err := configfile.Load(beadsDir)
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		return nil, nil, fmt.Errorf("doltlite requires a CGO build")
+	}
 	if err == nil && cfg != nil && cfg.IsDoltServerMode() {
 		store, err := dolt.NewFromConfig(ctx, beadsDir)
 		if err != nil {

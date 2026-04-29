@@ -4,6 +4,7 @@ package beads
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage/dolt"
@@ -19,6 +20,8 @@ import (
 //     exclusive flock to prevent corruption from concurrent access. This matches
 //     the behavior of the bd CLI.
 //   - Server mode: Connects to an external dolt sql-server via OpenFromConfig.
+//   - Doltlite mode: Opens a local doltlite database when metadata.json has
+//     backend="doltlite".
 //
 // The returned Storage must be closed when no longer needed. In embedded mode
 // the caller must also defer the Unlocker returned by the flock; pass nil-safe
@@ -40,13 +43,30 @@ func OpenBestAvailable(ctx context.Context, beadsDir string) (Storage, embeddedd
 		return store, embeddeddolt.NoopLock{}, nil
 	}
 
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		database := cfg.GetDoltDatabase()
+		store, err := doltlite.New(ctx, beadsDir, database, "main")
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, embeddeddolt.NoopLock{}, nil
+	}
+
+	// Embedded mode: acquire exclusive flock first.
+	dataDir := filepath.Join(beadsDir, "embeddeddolt")
+	lock, err := embeddeddolt.TryLock(dataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	database := configfile.DefaultDoltDatabase
 	if cfg != nil {
 		database = cfg.GetDoltDatabase()
 	}
-	store, err := doltlite.New(ctx, beadsDir, database, "main")
+	store, err := embeddeddolt.New(ctx, beadsDir, database, "main", embeddeddolt.WithLock(lock))
 	if err != nil {
+		lock.Unlock()
 		return nil, nil, err
 	}
-	return store, embeddeddolt.NoopLock{}, nil
+	return store, lock, nil
 }
