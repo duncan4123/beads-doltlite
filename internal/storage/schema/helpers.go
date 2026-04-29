@@ -3,6 +3,7 @@ package schema
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // EnsureIgnoredTables checks whether the dolt_ignore'd wisp tables exist in
@@ -67,7 +68,18 @@ func TableExists(ctx context.Context, db DBConn, table string) (bool, error) {
 	// #nosec G202 -- table names come from internal constants, not user input.
 	rows, err := db.QueryContext(ctx, "SHOW TABLES LIKE '"+table+"'") //nolint:gosec // G202: table name is an internal constant
 	if err != nil {
-		return false, fmt.Errorf("check table %s: %w", table, err)
+		if !strings.Contains(strings.ToLower(err.Error()), "syntax") {
+			return false, fmt.Errorf("check table %s: %w", table, err)
+		}
+		var name string
+		err = db.QueryRowContext(ctx, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&name)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "no rows") {
+				return false, nil
+			}
+			return false, fmt.Errorf("check sqlite table %s: %w", table, err)
+		}
+		return true, nil
 	}
 	defer rows.Close()
 	return rows.Next(), nil

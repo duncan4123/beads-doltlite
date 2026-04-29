@@ -12,6 +12,7 @@ import (
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/doltlite"
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 )
 
@@ -44,7 +45,7 @@ func newDoltStore(ctx context.Context, cfg *dolt.Config, opts ...embeddeddolt.Op
 	if cfg.ServerMode {
 		return dolt.New(ctx, cfg)
 	}
-	return embeddeddolt.New(ctx, cfg.BeadsDir, cfg.Database, "main", opts...)
+	return doltlite.New(ctx, cfg.BeadsDir, cfg.Database, "main")
 }
 
 // acquireEmbeddedLock acquires an exclusive flock on the embeddeddolt data
@@ -55,8 +56,7 @@ func acquireEmbeddedLock(beadsDir string, serverMode bool) (embeddeddolt.Unlocke
 	if serverMode {
 		return embeddeddolt.NoopLock{}, nil
 	}
-	dataDir := filepath.Join(beadsDir, "embeddeddolt")
-	return embeddeddolt.TryLock(dataDir)
+	return embeddeddolt.NoopLock{}, nil
 }
 
 // newDoltStoreFromConfig creates a storage backend from the beads directory's
@@ -80,7 +80,7 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltS
 		}
 		database = sanitized
 	}
-	return embeddeddolt.New(ctx, beadsDir, database, "main")
+	return doltlite.New(ctx, beadsDir, database, "main")
 }
 
 // migrateHyphenatedDB renames a legacy hyphenated database directory and
@@ -141,5 +141,5 @@ func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.D
 	if sanitized := sanitizeDBName(database); sanitized != database {
 		database = sanitized
 	}
-	return embeddeddolt.New(ctx, beadsDir, database, "main")
+	return doltlite.New(ctx, beadsDir, database, "main")
 }

@@ -4,10 +4,10 @@ package beads
 
 import (
 	"context"
-	"path/filepath"
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/doltlite"
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 )
 
@@ -40,21 +40,13 @@ func OpenBestAvailable(ctx context.Context, beadsDir string) (Storage, embeddedd
 		return store, embeddeddolt.NoopLock{}, nil
 	}
 
-	// Embedded mode: acquire exclusive flock first.
-	dataDir := filepath.Join(beadsDir, "embeddeddolt")
-	lock, err := embeddeddolt.TryLock(dataDir)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	database := configfile.DefaultDoltDatabase
 	if cfg != nil {
 		database = cfg.GetDoltDatabase()
 	}
-	store, err := embeddeddolt.New(ctx, beadsDir, database, "main", embeddeddolt.WithLock(lock))
+	store, err := doltlite.New(ctx, beadsDir, database, "main")
 	if err != nil {
-		lock.Unlock()
 		return nil, nil, err
 	}
-	return store, lock, nil
+	return store, embeddeddolt.NoopLock{}, nil
 }
