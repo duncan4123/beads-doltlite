@@ -372,6 +372,10 @@ func PersistDependencies(ctx context.Context, tx *sql.Tx, issues []*types.Issue,
 // ReconcileChildCounters updates child_counters so that subsequent
 // bd create --parent doesn't collide with imported hierarchical IDs.
 func ReconcileChildCounters(ctx context.Context, tx *sql.Tx, issues []*types.Issue) error {
+	return ReconcileChildCountersWithDialect(ctx, tx, issues, SQLDialectDolt)
+}
+
+func ReconcileChildCountersWithDialect(ctx context.Context, tx *sql.Tx, issues []*types.Issue, dialect SQLDialect) error {
 	childMaxMap := make(map[string]int)
 	for _, issue := range issues {
 		if parentID, childNum, ok := ParseHierarchicalID(issue.ID); ok {
@@ -385,10 +389,19 @@ func ReconcileChildCounters(ctx context.Context, tx *sql.Tx, issues []*types.Iss
 		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM issues WHERE id = ?", parentID).Scan(&parentExists); err != nil {
 			continue // parent not in issues table — skip counter
 		}
-		_, err := tx.ExecContext(ctx, `
+		upsert := `
 			INSERT INTO child_counters (parent_id, last_child) VALUES (?, ?)
 			ON DUPLICATE KEY UPDATE last_child = GREATEST(last_child, ?)
-		`, parentID, maxChild, maxChild)
+		`
+		args := []any{parentID, maxChild, maxChild}
+		if dialect == SQLDialectSQLite {
+			upsert = `
+				INSERT INTO child_counters (parent_id, last_child) VALUES (?, ?)
+				ON CONFLICT(parent_id) DO UPDATE SET last_child = MAX(child_counters.last_child, excluded.last_child)
+			`
+			args = []any{parentID, maxChild}
+		}
+		_, err := tx.ExecContext(ctx, upsert, args...)
 		if err != nil {
 			return fmt.Errorf("failed to reconcile child counter for %s: %w", parentID, err)
 		}
