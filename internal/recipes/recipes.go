@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	beadsplugin "github.com/steveyegge/beads/plugins/beads"
 )
 
 // RecipeType indicates how the recipe is installed.
@@ -32,12 +31,10 @@ type Recipe struct {
 	Path        string     `toml:"path"`        // Primary file path (for TypeFile)
 	Type        RecipeType `toml:"type"`        // How to install
 	Description string     `toml:"description"` // Brief description
-	Content     string     `toml:"-"`           // Optional static content for TypeFile
 	// Optional fields for complex recipes
-	GlobalPath  string            `toml:"global_path"`  // Global settings path (for hooks)
-	ProjectPath string            `toml:"project_path"` // Project settings path (for hooks)
-	Paths       []string          `toml:"paths"`        // Multiple paths (for multifile)
-	Contents    map[string]string `toml:"-"`            // Optional static contents for TypeMultiFile
+	GlobalPath  string   `toml:"global_path"`  // Global settings path (for hooks)
+	ProjectPath string   `toml:"project_path"` // Project settings path (for hooks)
+	Paths       []string `toml:"paths"`        // Multiple paths (for multifile)
 }
 
 // BuiltinRecipes contains the default recipe definitions.
@@ -70,29 +67,16 @@ var BuiltinRecipes = map[string]Recipe{
 	"claude": {
 		Name:        "Claude Code",
 		Type:        TypeHooks,
-		Description: "Claude Code hooks (SessionStart)",
+		Description: "Claude Code hooks (SessionStart, PreCompact)",
 		GlobalPath:  "~/.claude/settings.json",
 		ProjectPath: ".claude/settings.local.json",
 	},
 	"gemini": {
 		Name:        "Gemini CLI",
 		Type:        TypeHooks,
-		Description: "Gemini CLI hooks (SessionStart)",
+		Description: "Gemini CLI hooks (SessionStart, PreCompress)",
 		GlobalPath:  "~/.gemini/settings.json",
 		ProjectPath: ".gemini/settings.json",
-	},
-	"copilot": {
-		Name:        "GitHub Copilot CLI",
-		Type:        TypeMultiFile,
-		Description: "Copilot CLI plugin manifest + instructions",
-		Paths: []string{
-			".copilot-plugin/plugin.json",
-			".github/copilot-instructions.md",
-		},
-		Contents: map[string]string{
-			".copilot-plugin/plugin.json":     beadsplugin.CopilotPluginManifest(),
-			".github/copilot-instructions.md": CopilotInstructionsTemplate,
-		},
 	},
 	"factory": {
 		Name:        "Factory.ai (Droid)",
@@ -104,7 +88,7 @@ var BuiltinRecipes = map[string]Recipe{
 		Name:        "Codex CLI",
 		Path:        "AGENTS.md",
 		Type:        TypeSection,
-		Description: "Codex CLI skill guidance",
+		Description: "Codex CLI AGENTS.md section",
 	},
 	"mux": {
 		Name:        "Mux",

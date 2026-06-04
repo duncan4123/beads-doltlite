@@ -20,11 +20,11 @@ func bdBootstrap(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd bootstrap %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd bootstrap %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 func bdBootstrapAllowError(t *testing.T, bd, dir string, args ...string) (string, error) {
@@ -57,23 +57,20 @@ func TestBootstrapNoWorkspace(t *testing.T) {
 	})
 
 	t.Run("json_output", func(t *testing.T) {
-		cmd := exec.Command(bd, "bootstrap", "--json")
-		cmd.Dir = dir
-		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := bdBootstrapAllowError(t, bd, dir, "--json")
 		if err == nil {
 			t.Fatal("expected bd bootstrap --json to exit non-zero without a workspace")
 		}
 
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(out)
 		start := strings.Index(s, "{")
 		if start < 0 {
-			t.Fatalf("expected JSON object in output:\nstdout: %s\nstderr: %s", s, stderr.String())
+			t.Fatalf("expected JSON object in output, got: %s", out)
 		}
 
 		var payload map[string]interface{}
 		if err := json.Unmarshal([]byte(s[start:]), &payload); err != nil {
-			t.Fatalf("parse bootstrap JSON: %v\nstdout: %s", err, s)
+			t.Fatalf("parse bootstrap JSON: %v\n%s", err, s)
 		}
 		if action, _ := payload["action"].(string); action != "none" {
 			t.Fatalf("action = %q, want %q", action, "none")
@@ -150,13 +147,12 @@ func TestEmbeddedBootstrap(t *testing.T) {
 		bcmd.Dir = dir
 		bcmd.Env = bdEnv(dir)
 		bcmd.Stdin = strings.NewReader("y\n")
-		stdout, stderr, err := runCommandBuffers(t, bcmd)
+		out, err := bcmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bootstrap init failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bootstrap init failed: %v\n%s", err, out)
 		}
-		combined := stdout.String() + stderr.String()
-		if !strings.Contains(combined, "Created fresh database") {
-			t.Errorf("expected 'Created fresh database':\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+		if !strings.Contains(string(out), "Created fresh database") {
+			t.Errorf("expected 'Created fresh database': %s", out)
 		}
 	})
 
@@ -197,50 +193,12 @@ func TestEmbeddedBootstrap(t *testing.T) {
 		bcmd.Dir = dir
 		bcmd.Env = bdEnv(dir)
 		bcmd.Stdin = strings.NewReader("y\n")
-		stdout, stderr, err := runCommandBuffers(t, bcmd)
+		out, err := bcmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bootstrap jsonl-import failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bootstrap jsonl-import failed: %v\n%s", err, out)
 		}
-		combined := stdout.String() + stderr.String()
-		if !strings.Contains(combined, "Imported") {
-			t.Errorf("expected 'Imported' in output:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
-		}
-	})
-
-	t.Run("bootstrap_from_git_origin_wires_remote", func(t *testing.T) {
-		bareDir := filepath.Join(t.TempDir(), "origin.git")
-		runGitForBootstrapTest(t, "", "init", "--bare", "--initial-branch=main", bareDir)
-		remoteURL := "file://" + bareDir
-
-		sourceDir := t.TempDir()
-		initGitRepoAt(t, sourceDir)
-		runGitForBootstrapTest(t, sourceDir, "branch", "-M", "main")
-		runGitForBootstrapTest(t, sourceDir, "remote", "add", "origin", remoteURL)
-		runGitForBootstrapTest(t, sourceDir, "commit", "--allow-empty", "-m", "init")
-		runGitForBootstrapTest(t, sourceDir, "push", "-u", "origin", "main")
-		runBDInit(t, bd, sourceDir, "--prefix", "beads", "--skip-hooks", "--skip-agents")
-		bdCreate(t, bd, sourceDir, "Seed remote data", "--type", "task")
-		bdDolt(t, bd, sourceDir, "push")
-
-		cloneDir := t.TempDir()
-		runGitForBootstrapTest(t, cloneDir, "init", "-b", "main")
-		runGitForBootstrapTest(t, cloneDir, "remote", "add", "origin", remoteURL)
-
-		out := bdBootstrap(t, bd, cloneDir, "--yes")
-		if !strings.Contains(out, "clone from remote") {
-			t.Fatalf("expected bootstrap sync plan, got:\n%s", out)
-		}
-
-		remotes := bdDolt(t, bd, cloneDir, "remote", "list")
-		if !strings.Contains(remotes, "origin") || !strings.Contains(remotes, remoteURL) {
-			t.Fatalf("bootstrap should leave origin configured as a Dolt remote %q; remote list:\n%s", remoteURL, remotes)
-		}
-		configYAML, err := os.ReadFile(filepath.Join(cloneDir, ".beads", "config.yaml"))
-		if err != nil {
-			t.Fatalf("read config.yaml: %v", err)
-		}
-		if !strings.Contains(string(configYAML), remoteURL) {
-			t.Fatalf("bootstrap should persist sync.remote; config.yaml:\n%s", configYAML)
+		if !strings.Contains(string(out), "Imported") {
+			t.Errorf("expected 'Imported' in output: %s", out)
 		}
 	})
 }

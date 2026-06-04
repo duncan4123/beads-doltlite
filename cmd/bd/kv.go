@@ -28,8 +28,7 @@ func validateKVKey(key string) error {
 	// Prevent keys that look like internal config
 	if strings.HasPrefix(key, "sync.") || strings.HasPrefix(key, "conflict.") ||
 		strings.HasPrefix(key, "federation.") || strings.HasPrefix(key, "jira.") ||
-		strings.HasPrefix(key, "linear.") || strings.HasPrefix(key, "export.") ||
-		strings.HasPrefix(key, "import.") {
+		strings.HasPrefix(key, "linear.") || strings.HasPrefix(key, "export.") {
 		return fmt.Errorf("key cannot start with reserved prefix %q", strings.Split(key, ".")[0]+".")
 	}
 	return nil

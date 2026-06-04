@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -32,32 +31,23 @@ func TestUnixSocket_ConnectAndQuery(t *testing.T) {
 	}
 
 	// Initialize dolt database.
-	configureDoltTestIdentity(t, doltBin, tmpDir)
 	initCmd := exec.Command(doltBin, "init")
 	initCmd.Dir = doltDir
-	initCmd.Env = doltTestEnv(tmpDir)
+	initCmd.Env = append(os.Environ(), "HOME="+tmpDir, "DOLT_ROOT_PATH="+tmpDir)
 	if out, err := initCmd.CombinedOutput(); err != nil {
 		t.Fatalf("dolt init: %v\n%s", err, out)
 	}
 
 	socketPath := filepath.Join(tmpDir, "dolt.sock")
-	portListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("allocate TCP port: %v", err)
-	}
-	tcpPort := portListener.Addr().(*net.TCPAddr).Port
-	_ = portListener.Close()
 
-	// Start dolt sql-server with --socket. Current Dolt requires a valid TCP
-	// listener port even when the test connects exclusively over the socket.
+	// Start dolt sql-server with --socket and no TCP listener.
 	serverCmd := exec.Command(doltBin, "sql-server",
 		"--socket", socketPath,
 		"--loglevel=warning",
-		"-H", "127.0.0.1",
-		"-P", strconv.Itoa(tcpPort),
+		"-P", "0",
 	)
 	serverCmd.Dir = doltDir
-	serverCmd.Env = doltTestEnv(tmpDir)
+	serverCmd.Env = append(os.Environ(), "HOME="+tmpDir, "DOLT_ROOT_PATH="+tmpDir)
 	serverCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	logFile := filepath.Join(tmpDir, "dolt-server.log")
@@ -91,9 +81,8 @@ func TestUnixSocket_ConnectAndQuery(t *testing.T) {
 
 	// Connect via unix socket DSN.
 	dsn := doltutil.ServerDSN{
-		Socket:   socketPath,
-		User:     "root",
-		Database: "dolt",
+		Socket: socketPath,
+		User:   "root",
 	}.String()
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {

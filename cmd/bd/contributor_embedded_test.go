@@ -99,9 +99,9 @@ func initContributor(t *testing.T, bd, prefix string) (projectDir, planningDir s
 	cmd.Dir = projectDir
 	cmd.Env = append(bdEnv(projectDir), "BD_NON_INTERACTIVE=0")
 	cmd.Stdin = strings.NewReader("y\n" + planningDir + "\n")
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd init --contributor failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+		t.Fatalf("bd init --contributor failed: %v\n%s", err, out)
 	}
 
 	// Sanity: planning .beads dir should exist (created by wizard).

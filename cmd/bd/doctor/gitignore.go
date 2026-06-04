@@ -12,7 +12,6 @@ import (
 const GitignoreTemplate = `# Dolt database (managed by Dolt, not git)
 dolt/
 embeddeddolt/
-proxieddb/
 
 # Runtime files
 bd.sock
@@ -23,6 +22,9 @@ last-touched
 
 # Daemon runtime (lock, log, pid)
 daemon.*
+
+# Interactions log (runtime, not versioned)
+interactions.jsonl
 
 # Push state (runtime, per-machine)
 push-state.json
@@ -35,8 +37,6 @@ push-state.json
 
 # Local version tracking (prevents upgrade notification spam after git ops)
 .local_version
-
-proxied_server_client_info.json
 
 # Worktree redirect file (contains relative path to main repo's .beads/)
 # Must not be committed as paths would be wrong in other clones
@@ -60,9 +60,6 @@ dolt-server.log
 dolt-server.lock
 dolt-server.port
 dolt-server.activity
-
-# Debug-mode pprof artifacts (written when dolt.debug: true in config.yaml)
-dolt-pprof/
 
 # Corrupt backup directories (created by bd doctor --fix recovery)
 *.corrupt.backup/
@@ -93,11 +90,10 @@ var ProjectGitignorePatterns = []string{
 	".dolt/",
 	"*.db",
 	".beads-credential-key",
-	".beads/proxieddb/",
 }
 
-// ProjectGitignoreHeader is the section header added to the project .gitignore
-const ProjectGitignoreHeader = "# Beads / Dolt files (added by bd init)"
+// projectGitignoreComment is the section header added to the project .gitignore
+const projectGitignoreComment = "# Beads / Dolt files (added by bd init)"
 
 // requiredPatterns are patterns that MUST be in .beads/.gitignore
 var requiredPatterns = []string{
@@ -111,7 +107,6 @@ var requiredPatterns = []string{
 	"export-state.json",
 	"dolt/",
 	"embeddeddolt/",
-	"proxieddb/",
 	"ephemeral.sqlite3",
 	"dolt-server.pid",
 	"dolt-server.log",
@@ -119,10 +114,10 @@ var requiredPatterns = []string{
 	"dolt-server.port",
 	"dolt-server.activity",
 	"daemon.*",
+	"interactions.jsonl",
 	"*.lock",
 	"*.corrupt.backup/",
 	".beads-credential-key",
-	"proxied_server_client_info.json",
 }
 
 // CheckGitignore checks if .beads/.gitignore is up to date.
@@ -715,7 +710,7 @@ func EnsureProjectGitignore(repoPath string) error {
 		newContent += "\n"
 	}
 
-	newContent += "\n" + ProjectGitignoreHeader + "\n"
+	newContent += "\n" + projectGitignoreComment + "\n"
 	for _, pattern := range toAdd {
 		newContent += pattern + "\n"
 	}

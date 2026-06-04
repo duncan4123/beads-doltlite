@@ -243,16 +243,19 @@ func runWispCreate(cmd *cobra.Command, args []string) {
 		)
 	}
 
-	// By default, wisps materialize the same child DAG as pour, just marked
-	// Ephemeral=true so they don't sync via git. Use --root-only to opt out
-	// of fanout (e.g. for patrol wisps whose steps are inlined at prime time
-	// rather than tracked as beads). GH#3872.
+	// Wisps are vapor (ephemeral) by default — only create the root issue.
+	// Materializing child step issues is the "pour" path (bd pour), not wisps.
+	// Formulas that explicitly set pour=true get children even as wisps.
+	if !rootOnly && subgraph != nil && !subgraph.Pour {
+		rootOnly = true
+	}
+
 	if dryRun {
 		if rootOnly {
 			skipped := len(subgraph.Issues) - 1
 			fmt.Printf("\nDry run: would create wisp with 1 issue (root only) from proto %s\n", protoID)
 			if skipped > 0 {
-				fmt.Printf("  Note: %d child step(s) skipped (--root-only)\n", skipped)
+				fmt.Printf("  Note: %d child step(s) skipped — set pour=true in formula to materialize them\n", skipped)
 			}
 		} else {
 			fmt.Printf("\nDry run: would create wisp with %d issues from proto %s\n\n", len(subgraph.Issues), protoID)

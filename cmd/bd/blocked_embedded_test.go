@@ -27,12 +27,12 @@ func TestEmbeddedBlocked(t *testing.T) {
 		cmd := exec.Command(bd, "blocked")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd blocked failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd blocked failed: %v\n%s", err, out)
 		}
 		// No blocked issues on fresh db
-		_ = stdout.String()
+		_ = out
 	})
 
 	// ===== With Blocked Issue =====
@@ -52,12 +52,12 @@ func TestEmbeddedBlocked(t *testing.T) {
 		cmd = exec.Command(bd, "blocked")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd blocked failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd blocked failed: %v\n%s", err, out)
 		}
-		if !strings.Contains(stdout.String(), blocked.ID) {
-			t.Errorf("expected %s in blocked output: %s", blocked.ID, stdout.String())
+		if !strings.Contains(string(out), blocked.ID) {
+			t.Errorf("expected %s in blocked output: %s", blocked.ID, out)
 		}
 	})
 
@@ -67,11 +67,11 @@ func TestEmbeddedBlocked(t *testing.T) {
 		cmd := exec.Command(bd, "blocked", "--json")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd blocked --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd blocked --json failed: %v\n%s", err, out)
 		}
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.IndexAny(s, "[{")
 		if start < 0 {
 			t.Fatalf("no JSON in blocked --json output: %s", s)

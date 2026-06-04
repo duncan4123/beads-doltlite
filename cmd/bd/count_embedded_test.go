@@ -13,19 +13,17 @@ import (
 )
 
 // bdCount runs "bd count" with the given args and returns raw stdout.
-// Stderr (warnings, tips) is captured separately so it does not pollute
-// callers that parse stdout.
 func bdCount(t *testing.T, bd, dir string, args ...string) string {
 	t.Helper()
 	fullArgs := append([]string{"count"}, args...)
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd count %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd count %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdCountFail runs "bd count" expecting failure.
@@ -43,25 +41,24 @@ func bdCountFail(t *testing.T, bd, dir string, args ...string) string {
 }
 
 // bdCountJSON runs "bd count --json" and parses the result.
-// Stderr is captured separately so warnings do not corrupt JSON parsing.
 func bdCountJSON(t *testing.T, bd, dir string, args ...string) map[string]interface{} {
 	t.Helper()
 	fullArgs := append([]string{"count", "--json"}, args...)
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd count --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd count --json %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	s := strings.TrimSpace(stdout.String())
+	s := strings.TrimSpace(string(out))
 	start := strings.IndexAny(s, "{")
 	if start < 0 {
-		t.Fatalf("no JSON object in count output: %s\nstderr:\n%s", s, stderr.String())
+		t.Fatalf("no JSON object in count output: %s", s)
 	}
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(s[start:]), &m); err != nil {
-		t.Fatalf("parse count JSON: %v\n%s\nstderr:\n%s", err, s, stderr.String())
+		t.Fatalf("parse count JSON: %v\n%s", err, s)
 	}
 	return m
 }
@@ -522,24 +519,24 @@ func TestEmbeddedCountConcurrent(t *testing.T) {
 			cmd := exec.Command(bd, args...)
 			cmd.Dir = dir
 			cmd.Env = bdEnv(dir)
-			stdout, stderr, err := runCommandBuffers(t, cmd)
+			out, err := cmd.CombinedOutput()
 			if err != nil {
-				r.err = fmt.Errorf("worker %d count %v: %v\nstdout:\n%s\nstderr:\n%s", worker, q, err, stdout.String(), stderr.String())
+				r.err = fmt.Errorf("worker %d count %v: %v\n%s", worker, q, err, out)
 				results[worker] = r
 				return
 			}
 
-			// Verify JSON is parseable (parse stdout only; stderr may carry warnings).
-			s := strings.TrimSpace(stdout.String())
+			// Verify JSON is parseable
+			s := strings.TrimSpace(string(out))
 			start := strings.IndexAny(s, "{")
 			if start < 0 {
-				r.err = fmt.Errorf("worker %d: no JSON in stdout: %s\nstderr: %s", worker, s, stderr.String())
+				r.err = fmt.Errorf("worker %d: no JSON in output: %s", worker, s)
 				results[worker] = r
 				return
 			}
 			var m map[string]interface{}
 			if err := json.Unmarshal([]byte(s[start:]), &m); err != nil {
-				r.err = fmt.Errorf("worker %d: JSON parse: %v\nstdout: %s\nstderr: %s", worker, err, s, stderr.String())
+				r.err = fmt.Errorf("worker %d: JSON parse: %v\n%s", worker, err, s)
 				results[worker] = r
 				return
 			}

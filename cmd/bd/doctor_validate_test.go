@@ -112,12 +112,7 @@ func TestValidateCheck_DetectsOrphanedDeps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	// FK on depends_on_issue_id would normally block this; simulate the
-	// schema-drift scenario the validator is designed to catch.
-	if _, err = tx.Exec("SET FOREIGN_KEY_CHECKS = 0"); err != nil {
-		t.Fatalf("Failed to disable FK checks: %v", err)
-	}
-	_, err = tx.Exec("INSERT INTO dependencies (issue_id, depends_on_issue_id, type, created_by) VALUES (?, ?, ?, ?)",
+	_, err = tx.Exec("INSERT INTO dependencies (issue_id, depends_on_id, type, created_by) VALUES (?, ?, ?, ?)",
 		issue.ID, "test-nonexistent", "blocks", "test")
 	if err != nil {
 		t.Fatalf("Failed to insert orphaned dep: %v", err)
@@ -236,12 +231,7 @@ func TestValidateCheck_FixOrphanedDeps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to begin transaction: %v", err)
 	}
-	// FK on depends_on_issue_id would normally block this; simulate the
-	// schema-drift scenario the validator/fixer is designed to catch.
-	if _, err = tx.Exec("SET FOREIGN_KEY_CHECKS = 0"); err != nil {
-		t.Fatalf("Failed to disable FK checks: %v", err)
-	}
-	_, err = tx.Exec("INSERT INTO dependencies (issue_id, depends_on_issue_id, type, created_by) VALUES (?, ?, ?, ?)",
+	_, err = tx.Exec("INSERT INTO dependencies (issue_id, depends_on_id, type, created_by) VALUES (?, ?, ?, ?)",
 		issue.ID, "test-nonexistent", "blocks", "test")
 	if err != nil {
 		t.Fatalf("Failed to insert orphaned dep: %v", err)

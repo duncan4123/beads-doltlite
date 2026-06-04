@@ -237,8 +237,6 @@ func TestInstallFactoryReportsWriteError(t *testing.T) {
 }
 
 func TestCheckFactoryScenarios(t *testing.T) {
-	stubDetectRenderOpts(t)
-
 	t.Run("missing file", func(t *testing.T) {
 		env, stdout, _ := newFactoryTestEnv(t)
 		err := checkFactory(env)

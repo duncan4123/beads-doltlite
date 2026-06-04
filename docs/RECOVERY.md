@@ -1,10 +1,5 @@
 # Recovery Playbooks
 
-Last reviewed: 2026-05-08
-
-Freshness source: `cmd/bd/init.go`, `cmd/bd/init_safety.go`, and
-`cmd/bd/init_safety_test.go`.
-
 This document lives next to the ADRs and matches the structure of `bd`'s
 error messages: each named refusal in `bd init` points here to a labeled
 anchor with step-by-step recovery instructions.
@@ -139,13 +134,11 @@ permanently destroy them.
 ### 1. Export first, then proceed
 
 ```
-bd export > issue-export.jsonl
+bd export > backup.jsonl
 bd init --reinit-local
 ```
 
-`issue-export.jsonl` lets you re-import individual issues if needed. It is not
-a full database backup; use `bd backup` when the Dolt database is healthy
-enough to create a restorable backup before reinitializing.
+`backup.jsonl` lets you re-import individual issues if needed.
 
 ### 2. Investigate why you hit this
 

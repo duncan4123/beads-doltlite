@@ -20,11 +20,11 @@ func bdReopen(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd reopen %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd reopen %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 func TestEmbeddedReopen(t *testing.T) {
@@ -105,11 +105,11 @@ func TestEmbeddedReopen(t *testing.T) {
 		cmd := exec.Command(bd, "reopen", issue.ID, "--json")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd reopen --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd reopen --json failed: %v\n%s", err, out)
 		}
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.Index(s, "[")
 		if start < 0 {
 			start = strings.Index(s, "{")

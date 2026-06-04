@@ -19,11 +19,11 @@ func bdDolt(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd dolt %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd dolt %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdDoltFail runs "bd dolt" expecting failure and returns stderr+stdout.
@@ -298,9 +298,9 @@ func TestEmbeddedDoltConcurrent(t *testing.T) {
 // error even in server-mode projects. The guard is now inside each subcommand's
 // Run func, after store init. This test ensures embedded mode still correctly
 // rejects admin commands.
-func TestEmbeddedAdminBlocked(t *testing.T) {
-	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
-		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt integration tests")
+func TestAdminEmbeddedBlocked(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
 	t.Parallel()
 
@@ -337,9 +337,9 @@ func TestEmbeddedAdminBlocked(t *testing.T) {
 
 // TestAdminEmbeddedCompactReadOnlyAllowed verifies read-only compact modes are
 // not blocked by the embedded-mode admin guard.
-func TestEmbeddedAdminCompactReadOnlyAllowed(t *testing.T) {
-	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
-		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt integration tests")
+func TestAdminEmbeddedCompactReadOnlyAllowed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
 	t.Parallel()
 

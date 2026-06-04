@@ -9,8 +9,7 @@ func TestIsRecognizedConfigKey(t *testing.T) {
 	recognized := []string{
 		"export.auto", "dolt.auto-push", "jira.url", "custom.anything",
 		"doctor.suppress.git-hooks", "no-git-ops", "beads.role",
-		"status.custom", "ai.model", "backup.enabled", "import.path",
-		"dolt.local-only",
+		"status.custom", "ai.model", "backup.enabled",
 	}
 	for _, key := range recognized {
 		if !isRecognizedConfigKey(key) {
@@ -25,12 +24,6 @@ func TestIsRecognizedConfigKey(t *testing.T) {
 		if isRecognizedConfigKey(key) {
 			t.Errorf("isRecognizedConfigKey(%q) = true, want false", key)
 		}
-	}
-}
-
-func TestConfigHelpMentionsDoltLocalOnly(t *testing.T) {
-	if !strings.Contains(configCmd.Long, "bd config set dolt.local-only true") {
-		t.Fatalf("config help missing dolt.local-only example:\n%s", configCmd.Long)
 	}
 }
 

@@ -83,8 +83,11 @@ Examples:
 			outputJSON(undeferredIssues)
 		}
 
-		if len(args) > 0 {
-			commandDidWrite.Store(true)
+		// Embedded mode: flush Dolt commit.
+		if isEmbeddedMode() && len(args) > 0 && store != nil {
+			if _, err := store.CommitPending(ctx, actor); err != nil {
+				FatalError("failed to commit: %v", err)
+			}
 		}
 	},
 }

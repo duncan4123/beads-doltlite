@@ -149,7 +149,12 @@ that came from the removed repository.`,
 			}
 		}
 
-		commandDidWrite.Store(true)
+		// Embedded mode: flush Dolt commit before output.
+		if isEmbeddedMode() && store != nil {
+			if _, err := store.CommitPending(ctx, actor); err != nil {
+				return fmt.Errorf("failed to commit: %w", err)
+			}
+		}
 
 		if jsonOutput {
 			result := map[string]interface{}{
@@ -372,8 +377,11 @@ Also triggers Dolt push/pull if a remote is configured.`,
 		// Push is handled by periodic sync, not per-operation.
 		// Manual push available via: bd dolt push
 
-		if totalImported > 0 {
-			commandDidWrite.Store(true)
+		// Embedded mode: flush Dolt commit before output.
+		if isEmbeddedMode() && totalImported > 0 && store != nil {
+			if _, err := store.CommitPending(ctx, actor); err != nil {
+				return fmt.Errorf("failed to commit: %w", err)
+			}
 		}
 
 		if jsonOutput {

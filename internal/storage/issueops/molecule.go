@@ -20,10 +20,6 @@ func GetMoleculeProgressInTx(ctx context.Context, tx *sql.Tx, moleculeID string)
 
 	isWisp := IsActiveWispInTx(ctx, tx, moleculeID)
 	issueTable, _, _, depTable := WispTableRouting(isWisp)
-	parentCol := "depends_on_issue_id"
-	if isWisp {
-		parentCol = "depends_on_wisp_id"
-	}
 
 	// Get molecule title.
 	var title sql.NullString
@@ -35,8 +31,8 @@ func GetMoleculeProgressInTx(ctx context.Context, tx *sql.Tx, moleculeID string)
 	// Step 1: Get child issue IDs from dependencies table.
 	depRows, err := tx.QueryContext(ctx, fmt.Sprintf(`
 		SELECT issue_id FROM %s
-		WHERE %s = ? AND type = 'parent-child'
-	`, depTable, parentCol), moleculeID)
+		WHERE depends_on_id = ? AND type = 'parent-child'
+	`, depTable), moleculeID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get molecule children: %w", err)
 	}

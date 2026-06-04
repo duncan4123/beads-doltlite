@@ -16,11 +16,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - **Dolt** in `storage/dolt/` — version-controlled SQL database with cell-level merge
    - Common types and interfaces in `storage.go`
 
-2. **Database Runtime Layer**
-   - Embedded mode runs Dolt in-process through `internal/storage/embeddeddolt/`
-   - Server mode uses `internal/doltserver/` and `internal/storage/db/`
-   - Proxy and pidfile helpers live under `internal/storage/db/`
-   - Storage-facing server adapters live under `internal/storage/doltserver/`
+2. **RPC Layer** (`internal/rpc/`)
+   - Client/server architecture using Unix domain sockets (Windows named pipes)
+   - Protocol defined in `protocol.go`
+   - Server split into focused files: `server_core.go`, `server_issues_epics.go`, `server_labels_deps_comments.go`, etc.
+   - Used by Dolt server mode for multi-writer access
 
 3. **CLI Layer** (`cmd/bd/`)
    - Cobra-based commands (one file per command: `create.go`, `list.go`, etc.)
@@ -41,14 +41,13 @@ Remote (Dolt remotes: DoltHub, S3, GCS, etc.)
 
 - **Write path**: CLI → Dolt → auto-commit to Dolt history
 - **Read path**: Direct SQL queries against Dolt
-- **Sync**: Dolt handles versioning and sync natively via `bd dolt push` / `bd dolt pull`
+- **Sync**: Dolt handles versioning and sync natively; `bd export` available for data portability, `bd init --from-jsonl` for bootstrapping
 - **Hash-based IDs**: Automatic collision prevention (v0.20+)
 
 Core implementation:
 - Dolt storage: `internal/storage/dolt/`
-- Embedded runtime: `internal/storage/embeddeddolt/`
-- Server runtime: `internal/doltserver/`, `internal/storage/db/`, and `internal/storage/doltserver/`
-- Sync commands: `cmd/bd/dolt_*.go`, `cmd/bd/sync_*.go`
+- Export: `cmd/bd/export.go`
+- Sync: `cmd/bd/sync_git.go`
 
 ### Key Data Types
 
@@ -59,25 +58,43 @@ See `internal/types/types.go`:
 - `Comment`: Threaded discussions
 - `Event`: Full audit trail
 
-## Development Command Source
+## Common Development Commands
 
-Use [AGENT_INSTRUCTIONS.md](../AGENT_INSTRUCTIONS.md#testing-commands-no-ambiguity)
-for the current command policy. This file should not duplicate command matrices
-or version-management workflows.
+```bash
+# Build and install bd to ~/.local/bin (canonical location)
+make install
+
+# Test
+make test
+go test -tags gms_pure_go -coverprofile=coverage.out ./...
+
+# Run linter (baseline warnings documented in docs/LINTING.md)
+golangci-lint run ./...
+
+# Version management
+./scripts/bump-version.sh 0.9.3 --commit
+
+# Verify installed binary
+bd init --prefix test
+bd create "Test issue" -p 1
+bd ready
+```
 
 > **Do NOT** use `go build -o bd` or `go install` directly — they create
 > stale binaries that shadow `~/.local/bin/bd`. Always use `make install`.
 
 ## Testing Philosophy
 
-Testing guidance lives in [TESTING.md](TESTING.md) and
-[TESTING_PHILOSOPHY.md](TESTING_PHILOSOPHY.md). Architecture-specific notes for
-Claude are limited to where tests touch agent setup, hooks, or instruction-file
-generation.
+- Unit tests live next to implementation (`*_test.go`)
+- Integration tests use real Dolt databases (via server in temp dirs)
+- Script-based tests in `cmd/bd/testdata/*.txt` (see `scripttest_test.go`)
+- RPC layer has extensive isolation and edge case coverage
 
 ## Important Notes
 
 - **Always read AGENTS.md first** - it has the complete workflow
+- Install git hooks: `bd hooks install`
+- Use `bd dolt push` / `bd dolt pull` for remote sync
 - Check for duplicates proactively: `bd duplicates --auto-merge`
 - Use `--json` flags for all programmatic use
 
@@ -86,8 +103,8 @@ generation.
 - **AGENTS.md** - Complete workflow and development guide (READ THIS!)
 - **README.md** - User-facing documentation
 - **ADVANCED.md** - Advanced features (rename, merge, compaction)
-- **docs/LABELS.md** - Complete label system guide
-- **docs/CONFIG.md** - Configuration system
+- **LABELS.md** - Complete label system guide
+- **CONFIG.md** - Configuration system
 
 ## When Adding Features
 

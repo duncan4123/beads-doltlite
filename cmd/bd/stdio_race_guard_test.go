@@ -11,14 +11,12 @@ import (
 	"testing"
 )
 
-// cobraParallelUnsafeMethods lists cobra.Command methods that touch process
-// global state or lazily mutate inherited flag caches. Calling any of these in
-// a parallel test can race with stdio capture or another shared command tree
-// inspection.
-var cobraParallelUnsafeMethods = []string{
-	".Find(",
+// cobraOutputMethods lists cobra.Command methods that read os.Stdout or
+// os.Stderr via OutOrStdout()/ErrOrStderr(). Cobra evaluates os.Stdout as
+// an argument even when cmd.SetOut() has been called, so calling ANY of
+// these in a parallel test races with captureStdout()/captureStderr().
+var cobraOutputMethods = []string{
 	".Help(",
-	".InheritedFlags(",
 	".Execute(",
 	".Print(",
 	".Printf(",
@@ -31,19 +29,14 @@ var cobraParallelUnsafeMethods = []string{
 }
 
 // TestCobraParallelPolicyGuard scans test source files and fails if any
-// parallel test calls shared Cobra methods that are not safe under parallel
-// execution. This prevents races where cobra's OutOrStdout()/ErrOrStderr()
-// reads os.Stdout/os.Stderr concurrently with captureStdout()/captureStderr()
-// redirecting them, and races where Find()/InheritedFlags() lazily merge
-// persistent parent flags on shared global command objects.
+// parallel test calls cobra output methods. This prevents the data race
+// where cobra's OutOrStdout()/ErrOrStderr() reads os.Stdout/os.Stderr
+// concurrently with captureStdout()/captureStderr() redirecting them.
 //
-// The rule: if a top-level test function or test method contains t.Parallel()
-// (in code, not comments), it must NOT call any method name in
-// cobraParallelUnsafeMethods. The matcher is intentionally receiver-agnostic;
-// it favors a clear false positive over missing a shared Cobra command-state
-// race. Setting cmd.SetOut()/SetErr() does NOT prevent output races because
-// cobra eagerly evaluates os.Stdout as the default argument before checking
-// outWriter.
+// The rule: if a test function contains t.Parallel() (in code, not
+// comments), it must NOT call any cobra output method. Setting
+// cmd.SetOut()/SetErr() does NOT prevent the race because cobra eagerly
+// evaluates os.Stdout as the default argument before checking outWriter.
 //
 // Fix options for flagged tests:
 //  1. Remove t.Parallel() (preferred for fast tests)
@@ -58,7 +51,7 @@ func TestCobraParallelPolicyGuard(t *testing.T) {
 		t.Fatalf("glob: %v", err)
 	}
 
-	funcPattern := regexp.MustCompile(`(?m)^func\s+(?:\([^)]*\)\s+)?(Test\w+)\(`)
+	funcPattern := regexp.MustCompile(`(?m)^func (Test\w+)\(`)
 
 	for _, file := range testFiles {
 		data, err := os.ReadFile(file)
@@ -91,12 +84,13 @@ func TestCobraParallelPolicyGuard(t *testing.T) {
 			// guard scans itself, so its string constants would match).
 			strippedStrings := stripStringLiterals(stripped)
 
-			for _, method := range cobraParallelUnsafeMethods {
+			for _, method := range cobraOutputMethods {
 				if strings.Contains(strippedStrings, method) {
-					t.Errorf("%s:%s is t.Parallel() and calls method name %s — "+
-						"this can race with stdio capture or shared command flag caches. "+
+					t.Errorf("%s:%s is t.Parallel() and calls cobra %s — "+
+						"this races with captureStdout()/captureStderr() "+
+						"because cobra eagerly reads os.Stdout/os.Stderr. "+
 						"Remove t.Parallel() or serialize under stdioMutex. "+
-						"See stdioMutex in test_helpers_pure_test.go.",
+						"See stdioMutex in test_helpers_test.go.",
 						file, funcName, method)
 					break // one error per function is enough
 				}
@@ -123,28 +117,22 @@ func stripLineComments(s string) string {
 func stripStringLiterals(s string) string {
 	var b strings.Builder
 	inString := false
-	inRawString := false
 	escaped := false
 	for _, ch := range s {
 		if escaped {
 			escaped = false
 			continue
 		}
-		if ch == '\\' && inString && !inRawString {
+		if ch == '\\' && inString {
 			escaped = true
 			continue
 		}
-		if ch == '"' && !inRawString {
+		if ch == '"' {
 			inString = !inString
 			b.WriteRune(ch)
 			continue
 		}
-		if ch == '`' && !inString {
-			inRawString = !inRawString
-			b.WriteRune(ch)
-			continue
-		}
-		if !inString && !inRawString {
+		if !inString {
 			b.WriteRune(ch)
 		}
 	}

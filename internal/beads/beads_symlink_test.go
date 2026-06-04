@@ -139,10 +139,8 @@ func TestFindAllDatabases_MultipleSymlinksToSameDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create working directory under one symlinked path. FindAllDatabases walks
-	// upward from CWD and stops at the closest .beads directory; sibling
-	// symlinks should not create duplicate or missing results.
-	workdir := filepath.Join(link1, "workdir")
+	// Create working directory
+	workdir := filepath.Join(tmpDir, "workdir")
 	if err := os.MkdirAll(workdir, 0750); err != nil {
 		t.Fatal(err)
 	}

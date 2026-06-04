@@ -167,28 +167,10 @@ func TestEmbeddedShow(t *testing.T) {
 		_, _ = store.AddIssueComment(t.Context(), issue.ID, "tester", "A comment")
 		store.Close() // release flock before subprocess
 
-		// Comments are count-only by default; --include-comments streams them.
-		out, err := bdRunWithFlockRetry(t, bd, dir, "show", issue.ID, "--json", "--include-comments")
-		if err != nil {
-			t.Fatalf("bd show --include-comments failed: %v\n%s", err, out)
-		}
-		s := strings.TrimSpace(string(out))
-		if start := strings.IndexAny(s, "[{"); start >= 0 {
-			s = s[start:]
-		}
-		var m map[string]interface{}
-		if strings.HasPrefix(s, "[") {
-			var arr []map[string]interface{}
-			if jerr := json.Unmarshal([]byte(s), &arr); jerr != nil || len(arr) == 0 {
-				t.Fatalf("parse show JSON array: %v\n%s", jerr, s)
-			}
-			m = arr[0]
-		} else if jerr := json.Unmarshal([]byte(s), &m); jerr != nil {
-			t.Fatalf("parse show JSON: %v\n%s", jerr, s)
-		}
+		m := bdShowDetails(t, bd, dir, issue.ID)
 		comments, _ := m["comments"].([]interface{})
 		if len(comments) == 0 {
-			t.Error("expected comments in JSON output with --include-comments")
+			t.Error("expected comments in JSON output")
 		}
 	})
 
@@ -325,12 +307,12 @@ func TestEmbeddedShow(t *testing.T) {
 		cmd := exec.Command(bd, "view", issue.ID, "--short")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd view failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd view failed: %v\n%s", err, out)
 		}
-		if !strings.Contains(stdout.String(), issue.ID) {
-			t.Errorf("expected ID in view alias output: %s", stdout.String())
+		if !strings.Contains(string(out), issue.ID) {
+			t.Errorf("expected ID in view alias output: %s", out)
 		}
 	})
 

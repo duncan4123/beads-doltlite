@@ -8,54 +8,39 @@ import (
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 )
 
-func usesSQLServer() bool {
-	return true
-}
-
-// isEmbeddedMode reports whether the command is using embedded Dolt storage.
+// isEmbeddedMode returns false in non-CGO builds since embedded Dolt
+// requires CGO. Only server mode is available.
 func isEmbeddedMode() bool {
 	return false
 }
 
-func usesProxiedServer() bool {
-	if shouldUseGlobals() {
-		return proxiedServerMode
-	}
-	return cmdCtx != nil && cmdCtx.ProxiedServerMode
-}
-
-func newDoltStore(ctx context.Context, cfg *dolt.Config) (storage.DoltStorage, error) {
-	if cfg.ProxiedServer {
-		// TODO: this should not be a store
-		// it should be a uow provider
-		return nil, fmt.Errorf("proxy server store should be uow provider")
-	}
+// newDoltStore creates a server-mode storage backend. Embedded Dolt is not
+// available without CGO.
+func newDoltStore(ctx context.Context, cfg *dolt.Config, _ ...embeddeddolt.Option) (storage.DoltStorage, error) {
 	if !cfg.ServerMode {
 		return nil, fmt.Errorf("%s", nocgoEmbeddedErrMsg)
 	}
 	return dolt.New(ctx, cfg)
 }
 
-// acquireEmbeddedLock returns a no-op lock in non-CGO builds.
-func acquireEmbeddedLock(_ string, _ bool) (util.Unlocker, error) {
-	return util.NoopLock{}, nil
+func newDoltliteStore(_ context.Context, _, _ string) (storage.DoltStorage, error) {
+	return nil, fmt.Errorf("doltlite requires a CGO build")
 }
 
-// newDoltStoreFromConfig creates a SQL-server-backed storage backend from config.
+// acquireEmbeddedLock returns a no-op lock in non-CGO builds.
+func acquireEmbeddedLock(_ string, _ bool) (embeddeddolt.Unlocker, error) {
+	return embeddeddolt.NoopLock{}, nil
+}
+
+// newDoltStoreFromConfig creates a server-mode storage backend from config.
 func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
-	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
-		// TODO: this needs to be uow provider
-		return nil, fmt.Errorf("proxy server store should be uow provider")
-		// 	return newProxiedServerStore(ctx, &dolt.Config{
-		// 		BeadsDir:      beadsDir,
-		// 		Database:      cfg.GetDoltDatabase(),
-		// 		ProxiedServer: true,
-		// 	})
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		return nil, fmt.Errorf("doltlite requires a CGO build")
 	}
 	if err == nil && cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfig(ctx, beadsDir)
@@ -63,18 +48,11 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltS
 	return nil, fmt.Errorf("%s", nocgoEmbeddedErrMsg)
 }
 
-// newReadOnlyStoreFromConfig creates a read-only SQL-server-backed storage backend.
+// newReadOnlyStoreFromConfig creates a read-only server-mode storage backend.
 func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
-	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
-		// TODO: this needs to be uow provider
-		return nil, fmt.Errorf("proxy server store needs to be uow provider")
-		// return newProxiedServerStore(ctx, &dolt.Config{
-		// 	BeadsDir:      beadsDir,
-		// 	Database:      cfg.GetDoltDatabase(),
-		// 	ProxiedServer: true,
-		// 	ReadOnly:      true,
-		// })
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		return nil, fmt.Errorf("doltlite requires a CGO build")
 	}
 	if err == nil && cfg != nil && cfg.IsDoltServerMode() {
 		return dolt.NewFromConfigWithOptions(ctx, beadsDir, &dolt.Config{ReadOnly: true})
@@ -82,20 +60,18 @@ func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.D
 	return nil, fmt.Errorf("%s", nocgoEmbeddedErrMsg)
 }
 
+// nocgoEmbeddedErrMsg guides the user either to server mode (no rebuild
+// needed) or to an embedded-capable install path. It intentionally enumerates
+// the canonical install paths so users don't have to hunt through docs.
 const nocgoEmbeddedErrMsg = `embedded Dolt requires a CGO build, but this bd binary was built with CGO_ENABLED=0.
 
-Three options:
+Two options:
 
-  1. Use the proxied dolt sql-server (no external server, no reinstall):
-       bd init --proxied-server
-     bd spawns a per-workspace proxy + child dolt sql-server under
-     .beads/proxieddb/ and manages their lifecycle for you.
-
-  2. Use external server mode (no reinstall needed):
+  1. Use server mode (no reinstall needed):
        bd init --server
      Requires a running 'dolt sql-server'. See docs/DOLT.md.
 
-  3. Reinstall with embedded-mode support:
+  2. Reinstall with embedded-mode support:
        brew install beads                              # macOS / Linux
        npm install -g @beads/bd                        # any platform with Node
        curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash

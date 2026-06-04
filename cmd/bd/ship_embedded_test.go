@@ -18,11 +18,11 @@ func bdShip(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd ship %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd ship %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdShipFail runs "bd ship" expecting failure.

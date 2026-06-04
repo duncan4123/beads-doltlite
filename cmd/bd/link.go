@@ -68,11 +68,10 @@ Examples:
 		// Check for cycles after adding dependency
 		warnIfCyclesExist(fromStore)
 
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "link",
-			IssueIDs: []string{fromID, toID},
-		}); err != nil {
-			FatalErrorRespectJSON("failed to commit: %v", err)
+		if isEmbeddedMode() && fromStore != nil {
+			if _, err := fromStore.CommitPending(ctx, actor); err != nil {
+				FatalErrorRespectJSON("failed to commit: %v", err)
+			}
 		}
 
 		SetLastTouchedID(fromID)

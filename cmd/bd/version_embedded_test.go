@@ -21,11 +21,11 @@ func TestEmbeddedVersion(t *testing.T) {
 
 	t.Run("version_output", func(t *testing.T) {
 		cmd := exec.Command(bd, "version")
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd version failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd version failed: %v\n%s", err, out)
 		}
-		s := stdout.String()
+		s := string(out)
 		if len(strings.TrimSpace(s)) == 0 {
 			t.Error("expected non-empty version output")
 		}

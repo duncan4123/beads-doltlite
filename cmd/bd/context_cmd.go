@@ -21,7 +21,6 @@ type ContextInfo struct {
 	DoltMode      string `json:"dolt_mode"`
 	ServerHost    string `json:"server_host,omitempty"`
 	ServerPort    int    `json:"server_port,omitempty"`
-	ProxiedDir    string `json:"proxied_dir,omitempty"`
 	Database      string `json:"database"`
 	DataDir       string `json:"data_dir,omitempty"`
 	ProjectID     string `json:"project_id,omitempty"`
@@ -89,6 +88,7 @@ Examples:
 		info.DoltMode = cfg.GetDoltMode()
 		info.Database = cfg.GetDoltDatabase()
 		info.ProjectID = cfg.ProjectID
+		info.Backend = cfg.GetBackend()
 
 		if cfg.IsDoltServerMode() {
 			info.ServerHost = cfg.GetDoltServerHost()
@@ -97,13 +97,6 @@ Examples:
 			// This matches what "bd dolt show" does (GH#2555).
 			dsCfg := doltserver.DefaultConfig(rc.BeadsDir)
 			info.ServerPort = dsCfg.Port
-		}
-		if cfg.IsDoltProxiedServerMode() {
-			p, err := resolveProxiedServerRootPath(rc.BeadsDir)
-			if err != nil {
-				FatalError("resolve proxied server root: %v", err)
-			}
-			info.ProxiedDir = p
 		}
 
 		if dataDir := cfg.GetDoltDataDir(); dataDir != "" {
@@ -153,9 +146,6 @@ func printContextText(info ContextInfo) {
 	fmt.Printf("  database:     %s\n", info.Database)
 	if info.ServerHost != "" {
 		fmt.Printf("  server:       %s:%d\n", info.ServerHost, info.ServerPort)
-	}
-	if info.ProxiedDir != "" {
-		fmt.Printf("  proxied dir:  %s\n", info.ProxiedDir)
 	}
 	if info.DataDir != "" {
 		fmt.Printf("  data dir:     %s\n", info.DataDir)

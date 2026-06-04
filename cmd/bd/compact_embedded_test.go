@@ -18,11 +18,11 @@ func bdCompact(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd compact %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd compact %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdCompactFail runs "bd compact" expecting failure.
@@ -139,12 +139,12 @@ func TestEmbeddedCompact(t *testing.T) {
 		cmd := exec.Command(bd, "--json", "compact", "--dry-run")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd --json compact --dry-run failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd --json compact --dry-run failed: %v\n%s", err, out)
 		}
 		// Should produce some output without crashing
-		_ = stdout.String()
+		_ = out
 	})
 }
 

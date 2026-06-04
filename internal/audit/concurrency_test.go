@@ -45,7 +45,7 @@ func TestAppend_ConcurrentWritersUniqueIDs(t *testing.T) {
 
 	const (
 		writers          = 8
-		entriesPerWriter = 1000
+		entriesPerWriter = 250
 		totalEntries     = writers * entriesPerWriter
 	)
 

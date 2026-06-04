@@ -2305,7 +2305,7 @@ func TestShowJSONFieldCompleteness(t *testing.T) {
 	cID := scenario(candidateWS)
 
 	bRaw := baselineWS.run("show", bID, "--json")
-	cRaw := candidateWS.showJSONForSnapshot(cID)
+	cRaw := candidateWS.run("show", cID, "--json")
 
 	// Parse and compare field presence
 	bFields := parseJSONFieldNames(t, bRaw)

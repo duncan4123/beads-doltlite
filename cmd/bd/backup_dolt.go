@@ -20,7 +20,7 @@ import (
 // These wrap Dolt's built-in backup feature (CALL DOLT_BACKUP(...)) for standalone
 // users who want their beads database backed up to a filesystem path, NAS, or DoltHub.
 //
-// Unlike issue JSONL exports, Dolt-native backups preserve full commit history
+// Unlike the JSONL backup (bd backup), Dolt backups preserve full commit history
 // and are faster for large databases.
 
 const defaultDoltBackupName = "default"
@@ -125,10 +125,17 @@ Run 'bd backup init <path>' first to configure a destination.`,
 		}
 
 		// First, commit any pending changes so they're included in the backup
-		if err := store.Commit(ctx, "bd: pre-backup commit"); err != nil && !isDoltNothingToCommit(err) {
+		committer, ok := storage.UnwrapStore(store).(storage.PendingCommitter)
+		if !ok {
+			return fmt.Errorf("storage backend does not support pending commits")
+		}
+		committed, err := committer.CommitPending(ctx, getActor())
+		if err != nil && !strings.Contains(err.Error(), "nothing to commit") {
 			fmt.Fprintf(os.Stderr, "Warning: failed to commit pending changes: %v\n", err)
 		}
-		commandDidExplicitDoltCommit = true
+		if committed {
+			commandDidExplicitDoltCommit = true
+		}
 
 		start := time.Now()
 

@@ -53,9 +53,13 @@ func GetCommentCountsInTx(ctx context.Context, tx *sql.Tx, issueIDs []string) (m
 
 	result := make(map[string]int)
 
-	wispIDs, permIDs, err := PartitionWispIDsInTx(ctx, tx, issueIDs)
-	if err != nil {
-		return nil, fmt.Errorf("partition comment issue IDs: %w", err)
+	var wispIDs, permIDs []string
+	for _, id := range issueIDs {
+		if IsActiveWispInTx(ctx, tx, id) {
+			wispIDs = append(wispIDs, id)
+		} else {
+			permIDs = append(permIDs, id)
+		}
 	}
 
 	for _, pair := range []struct {

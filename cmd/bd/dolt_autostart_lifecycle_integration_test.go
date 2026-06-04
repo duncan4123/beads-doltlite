@@ -1,4 +1,4 @@
-//go:build cgo && integration
+//go:build cgo
 
 package main
 
@@ -15,7 +15,10 @@ import (
 )
 
 func TestE2E_AutoStartedRepoLocalServerPersistsAcrossCommands(t *testing.T) {
-	if !usesSQLServer() {
+	if testing.Short() {
+		t.Skip("skipping slow integration test in short mode")
+	}
+	if isEmbeddedMode() {
 		t.Skip("skipping: bd dolt status not supported in embedded mode")
 	}
 	if runtime.GOOS == windowsOS {

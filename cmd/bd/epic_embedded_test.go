@@ -21,11 +21,11 @@ func bdEpic(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd epic %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd epic %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdEpicJSON runs "bd epic" with --json and parses the result.
@@ -36,11 +36,11 @@ func bdEpicJSON(t *testing.T, bd, dir string, args ...string) interface{} {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd epic --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd epic --json %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	s := strings.TrimSpace(stdout.String())
+	s := strings.TrimSpace(string(out))
 	start := strings.IndexAny(s, "{[")
 	if start < 0 {
 		t.Fatalf("no JSON in epic output: %s", s)
@@ -159,12 +159,12 @@ func TestEmbeddedEpic(t *testing.T) {
 		cmd := exec.Command(bd, fullArgs...)
 		cmd.Dir = dir4
 		cmd.Env = bdEnv(dir4)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("epic close-eligible --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("epic close-eligible --json failed: %v\n%s", err, out)
 		}
 		// Should produce valid JSON (empty array or object)
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.IndexAny(s, "{[")
 		if start < 0 {
 			t.Fatalf("no JSON: %s", s)

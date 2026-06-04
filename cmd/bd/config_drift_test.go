@@ -5,20 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/steveyegge/beads/internal/git"
 )
-
-func chdirForDriftTest(t *testing.T, dir string) {
-	t.Helper()
-	t.Chdir(dir)
-	git.ResetCaches()
-	t.Cleanup(git.ResetCaches)
-}
 
 // TestCheckHooksDriftNotGitRepo verifies hooks check skips when not in a git repo.
 func TestCheckHooksDriftNotGitRepo(t *testing.T) {
-	chdirForDriftTest(t, t.TempDir())
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir) //nolint:errcheck
 
 	items := checkHooksDrift()
 	if len(items) != 1 {
@@ -34,7 +30,12 @@ func TestCheckHooksDriftNotGitRepo(t *testing.T) {
 
 // TestCheckServerDriftNoBeadsDir verifies server check skips when no .beads exists.
 func TestCheckServerDriftNoBeadsDir(t *testing.T) {
-	chdirForDriftTest(t, t.TempDir())
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir) //nolint:errcheck
 
 	items := checkServerDrift()
 	if len(items) != 1 {
@@ -47,7 +48,12 @@ func TestCheckServerDriftNoBeadsDir(t *testing.T) {
 
 // TestCheckRemoteDriftNoBeadsDir verifies remote check skips when no .beads exists.
 func TestCheckRemoteDriftNoBeadsDir(t *testing.T) {
-	chdirForDriftTest(t, t.TempDir())
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir) //nolint:errcheck
 
 	items := checkRemoteDrift()
 	if len(items) != 1 {
@@ -126,7 +132,12 @@ func TestDriftItemStatuses(t *testing.T) {
 // TestRunDriftChecksReturnsResults verifies the aggregator returns results from all checks.
 func TestRunDriftChecksReturnsResults(t *testing.T) {
 	// When run from a non-beads directory, we should still get results (skipped checks)
-	chdirForDriftTest(t, t.TempDir())
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(origDir) //nolint:errcheck
 
 	items := runDriftChecks()
 	if len(items) == 0 {

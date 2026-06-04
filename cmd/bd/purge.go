@@ -115,15 +115,13 @@ func runPurgeOrPrune(cmd *cobra.Command, scope purgeScope) {
 	}
 
 	// Parse --older-than duration (e.g., "7d", "30d", "24h", or just "30" for days)
-	var cutoff *time.Time
 	if olderThan != "" {
 		days, err := parseHumanDuration(olderThan)
 		if err != nil {
 			FatalError("invalid --older-than value %q: %v", olderThan, err)
 		}
-		cutoffTime := time.Now().UTC().AddDate(0, 0, -days)
-		cutoff = &cutoffTime
-		filter.ClosedBefore = cutoff
+		cutoff := time.Now().AddDate(0, 0, -days)
+		filter.ClosedBefore = &cutoff
 	}
 
 	// Get matching issues
@@ -143,10 +141,17 @@ func runPurgeOrPrune(cmd *cobra.Command, scope purgeScope) {
 		closedIssues = matched
 	}
 
-	var safetyStats closedDeletionCandidateStats
-	closedIssues, safetyStats = filterClosedDeletionCandidates(closedIssues, cutoff)
-	pinnedCount := safetyStats.PinnedSkipped
-	warnClosedDeletionSafetySkips(safetyStats)
+	// Filter out pinned beads
+	pinnedCount := 0
+	filtered := make([]*types.Issue, 0, len(closedIssues))
+	for _, issue := range closedIssues {
+		if issue.Pinned {
+			pinnedCount++
+			continue
+		}
+		filtered = append(filtered, issue)
+	}
+	closedIssues = filtered
 
 	// Report nothing-to-do
 	if len(closedIssues) == 0 {
@@ -256,9 +261,11 @@ func runPurgeOrPrune(cmd *cobra.Command, scope purgeScope) {
 		}
 	}
 
-	if result.DeletedCount > 0 {
-		commandDidWrite.Store(true)
-		commandMayEmptyJSONLExport.Store(true)
+	// Embedded mode: flush Dolt commit.
+	if isEmbeddedMode() && result.DeletedCount > 0 && store != nil {
+		if _, err := store.CommitPending(ctx, actor); err != nil {
+			FatalError("failed to commit: %v", err)
+		}
 	}
 }
 

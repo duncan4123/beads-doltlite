@@ -89,7 +89,12 @@ func runRename(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Renamed %s -> %s\n", ui.RenderWarn(oldID), ui.RenderAccent(newID))
 
-	commandDidWrite.Store(true)
+	// Embedded mode: flush Dolt commit.
+	if isEmbeddedMode() && store != nil {
+		if _, err := store.CommitPending(ctx, actor); err != nil {
+			return fmt.Errorf("failed to commit: %w", err)
+		}
+	}
 
 	return nil
 }

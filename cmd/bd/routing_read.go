@@ -12,33 +12,22 @@ import (
 	"github.com/steveyegge/beads/internal/storage"
 )
 
-var routingConfigKeys = []string{
-	"routing.mode",
-	"routing.contributor",
-	"routing.default",
-	"routing.maintainer",
-	"contributor.auto_route",
-	"contributor.planning_repo",
-}
-
-func resolveRoutingConfigValue(key string, dbValues map[string]string) string {
-	if src := config.GetValueSource(key); src != config.SourceDefault {
-		if value := strings.TrimSpace(config.GetString(key)); value != "" {
-			return value
-		}
-	}
-	return strings.TrimSpace(dbValues[key])
-}
-
+// getRoutingConfigValue resolves routing config from YAML/env first, then DB config.
+// Only uses the YAML value if it was explicitly set (not a Viper default), so that
+// DB-stored values aren't shadowed by defaults like "~/.beads-planning".
 func getRoutingConfigValue(ctx context.Context, store storage.DoltStorage, key string) string {
+	// Only trust YAML/env values that were explicitly set, not Viper defaults.
 	if src := config.GetValueSource(key); src != config.SourceDefault {
-		if value := strings.TrimSpace(config.GetString(key)); value != "" {
+		value := strings.TrimSpace(config.GetString(key))
+		if value != "" {
 			return value
 		}
 	}
+
 	if store == nil {
 		return ""
 	}
+
 	dbValue, err := store.GetConfig(ctx, key)
 	if err != nil {
 		debug.Logf("DEBUG: failed to read config %q from store: %v\n", key, err)
@@ -47,43 +36,32 @@ func getRoutingConfigValue(ctx context.Context, store storage.DoltStorage, key s
 	return strings.TrimSpace(dbValue)
 }
 
+// determineAutoRoutedRepoPath returns the repository path that should be used for
+// issue reads when contributor auto-routing is enabled.
 func determineAutoRoutedRepoPath(ctx context.Context, store storage.DoltStorage) string {
 	userRole, err := routing.DetectUserRole(".")
 	if err != nil {
 		debug.Logf("Warning: failed to detect user role: %v\n", err)
 	}
 
-	var dbValues map[string]string
-	if store != nil {
-		all, allErr := store.GetAllConfig(ctx)
-		if allErr != nil {
-			debug.Logf("DEBUG: failed to read config from store: %v\n", allErr)
-		} else {
-			dbValues = make(map[string]string, len(routingConfigKeys))
-			for _, key := range routingConfigKeys {
-				if v, ok := all[key]; ok {
-					dbValues[key] = v
-				}
-			}
-		}
-	}
+	// Build routing config with backward compatibility for legacy contributor.* keys.
+	routingMode := getRoutingConfigValue(ctx, store, "routing.mode")
+	contributorRepo := getRoutingConfigValue(ctx, store, "routing.contributor")
 
-	routingMode := resolveRoutingConfigValue("routing.mode", dbValues)
-	contributorRepo := resolveRoutingConfigValue("routing.contributor", dbValues)
-
+	// Backward compatibility - fall back to legacy contributor.* keys
 	if routingMode == "" {
-		if resolveRoutingConfigValue("contributor.auto_route", dbValues) == "true" {
+		if getRoutingConfigValue(ctx, store, "contributor.auto_route") == "true" {
 			routingMode = "auto"
 		}
 	}
 	if contributorRepo == "" {
-		contributorRepo = resolveRoutingConfigValue("contributor.planning_repo", dbValues)
+		contributorRepo = getRoutingConfigValue(ctx, store, "contributor.planning_repo")
 	}
 
 	routingConfig := &routing.RoutingConfig{
 		Mode:             routingMode,
-		DefaultRepo:      resolveRoutingConfigValue("routing.default", dbValues),
-		MaintainerRepo:   resolveRoutingConfigValue("routing.maintainer", dbValues),
+		DefaultRepo:      getRoutingConfigValue(ctx, store, "routing.default"),
+		MaintainerRepo:   getRoutingConfigValue(ctx, store, "routing.maintainer"),
 		ContributorRepo:  contributorRepo,
 		ExplicitOverride: "",
 	}

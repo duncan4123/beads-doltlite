@@ -41,8 +41,10 @@ type Config struct {
 	// to the wrong Dolt server (GH#2372).
 	ProjectID string `json:"project_id,omitempty"`
 
+	// GlobalDoltDatabase is the SQL database name for the project-agnostic
+	// global issue database in shared-server mode. Set during bd init when
+	// shared-server mode is active. Empty means no global database available.
 	GlobalDoltDatabase string `json:"global_dolt_database,omitempty"`
-	GlobalProjectID    string `json:"global_project_id,omitempty"`
 
 	// Stale closed issues check configuration
 	// 0 = disabled (default), positive = threshold in days
@@ -111,6 +113,10 @@ func Load(beadsDir string) (*Config, error) {
 func (c *Config) Save(beadsDir string) error {
 	configPath := ConfigPath(beadsDir)
 
+	// Strip absolute dolt_data_dir before saving — metadata.json is committed
+	// to git and propagates to other clones, but absolute paths are
+	// machine-specific and cause data-loss on other machines (GH#2251).
+	// Users should set absolute paths via BEADS_DOLT_DATA_DIR env var instead.
 	saved := *c
 	if filepath.IsAbs(saved.DoltDataDir) {
 		saved.DoltDataDir = ""
@@ -169,7 +175,8 @@ func (c *Config) GetStaleClosedIssuesDays() int {
 
 // Backend constants
 const (
-	BackendDolt = "dolt"
+	BackendDolt     = "dolt"
+	BackendDoltlite = "doltlite"
 )
 
 // BackendCapabilities describes behavioral constraints for a storage backend.
@@ -187,33 +194,51 @@ type BackendCapabilities struct {
 }
 
 // CapabilitiesForBackend returns capabilities for a backend string.
-// Dolt is the only supported backend. Returns SingleProcessOnly=true by default;
-// use Config.GetCapabilities() to properly handle server mode.
-func CapabilitiesForBackend(_ string) BackendCapabilities {
-	return BackendCapabilities{SingleProcessOnly: true}
+// Embedded Dolt and doltlite are single-process-only; Dolt server mode is
+// handled by Config.GetCapabilities().
+func CapabilitiesForBackend(backend string) BackendCapabilities {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case BackendDolt, BackendDoltlite, "":
+		return BackendCapabilities{SingleProcessOnly: true}
+	default:
+		return BackendCapabilities{SingleProcessOnly: true}
+	}
 }
 
 // GetCapabilities returns the backend capabilities for this config.
 // Unlike CapabilitiesForBackend(string), this considers Dolt server mode
-// (and proxied-server mode) which support multi-process access.
+// which supports multi-process access.
 func (c *Config) GetCapabilities() BackendCapabilities {
 	backend := c.GetBackend()
-	if backend == BackendDolt && (c.IsDoltServerMode() || c.IsDoltProxiedServerMode()) {
+	if backend == BackendDolt && c.IsDoltServerMode() {
+		// Server mode supports multi-writer, so NOT single-process-only
 		return BackendCapabilities{SingleProcessOnly: false}
 	}
 	return CapabilitiesForBackend(backend)
 }
 
-// GetBackend returns the backend type. Always returns "dolt".
+// GetBackend returns the backend type. Missing/legacy values default to "dolt".
 func (c *Config) GetBackend() string {
+	if c != nil {
+		switch strings.ToLower(strings.TrimSpace(c.Backend)) {
+		case BackendDoltlite:
+			return BackendDoltlite
+		case BackendDolt, "":
+			return BackendDolt
+		}
+	}
 	return BackendDolt
+}
+
+// IsDoltliteBackend returns true when metadata explicitly selects doltlite.
+func (c *Config) IsDoltliteBackend() bool {
+	return c.GetBackend() == BackendDoltlite
 }
 
 // Dolt mode constants
 const (
-	DoltModeEmbedded      = "embedded"
-	DoltModeServer        = "server"
-	DoltModeProxiedServer = "proxied-server"
+	DoltModeEmbedded = "embedded"
+	DoltModeServer   = "server"
 )
 
 // Default Dolt server settings
@@ -231,8 +256,7 @@ const (
 // Checks (in priority order):
 //  1. BEADS_DOLT_SERVER_MODE=1 env var
 //  2. BEADS_DOLT_SHARED_SERVER env var (shared-server implies server mode)
-//  3. dolt_mode field in metadata.json (project-local, explicit)
-//  4. dolt.mode in config.yaml (user-global fallback, only when metadata.json has no mode)
+//  3. dolt_mode field in metadata.json
 //
 // Runtime env vars take precedence over persisted metadata.json to prevent
 // stale dolt_mode=embedded from overriding active server intent (GH#2949).
@@ -248,22 +272,7 @@ func (c *Config) IsDoltServerMode() bool {
 	if v := os.Getenv("BEADS_DOLT_SHARED_SERVER"); v == "1" || strings.EqualFold(v, "true") {
 		return true
 	}
-	if c.DoltMode != "" {
-		// metadata.json has an explicit mode — respect it over config.yaml
-		return strings.ToLower(c.DoltMode) == DoltModeServer
-	}
-	// Fall back to config.yaml dolt.mode setting (no metadata.json mode set)
-	if mode := config.GetYamlConfig("dolt.mode"); strings.EqualFold(mode, "server") {
-		return true
-	}
-	return false
-}
-
-func (c *Config) IsDoltProxiedServerMode() bool {
-	if c.GetBackend() != BackendDolt {
-		return false
-	}
-	return strings.ToLower(c.DoltMode) == DoltModeProxiedServer
+	return strings.ToLower(c.DoltMode) == DoltModeServer
 }
 
 // GetDoltMode returns the Dolt connection mode, defaulting to server.
@@ -355,10 +364,6 @@ func (c *Config) GetDoltDatabase() string {
 // Returns empty string if no global database is configured.
 func (c *Config) GetGlobalDoltDatabase() string {
 	return c.GlobalDoltDatabase
-}
-
-func (c *Config) GetGlobalProjectID() string {
-	return c.GlobalProjectID
 }
 
 // GetDoltServerPassword returns the Dolt server password.

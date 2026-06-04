@@ -220,10 +220,11 @@ func TestOpenBestAvailable_ServerMode(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	store, err := beads.OpenBestAvailable(ctx, beadsDir)
+	store, lock, err := beads.OpenBestAvailable(ctx, beadsDir)
 	if err != nil {
 		t.Fatalf("OpenBestAvailable (server mode) failed: %v", err)
 	}
+	defer lock.Unlock()
 	defer store.Close()
 
 	if store == nil {
@@ -261,7 +262,7 @@ func TestOpenBestAvailable_ServerMode_FailsWithoutServer(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, openErr := beads.OpenBestAvailable(ctx, beadsDir)
+	_, _, openErr := beads.OpenBestAvailable(ctx, beadsDir)
 	if openErr == nil {
 		t.Fatal("OpenBestAvailable (server mode) should fail when no server is running")
 	}

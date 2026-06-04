@@ -213,6 +213,9 @@ func TestCompactTier1_IneligibleIssue(t *testing.T) {
 }
 
 func TestCompactTier1_WithAPI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow API test in short mode")
+	}
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		t.Skip("ANTHROPIC_API_KEY not set, skipping API test")
 	}
@@ -343,6 +346,9 @@ func TestCompactTier1Batch_WithIneligible(t *testing.T) {
 }
 
 func TestCompactTier1Batch_WithAPI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow API test in short mode")
+	}
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		t.Skip("ANTHROPIC_API_KEY not set, skipping API test")
 	}

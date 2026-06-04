@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/ado"
-	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/github"
 	"github.com/steveyegge/beads/internal/gitlab"
 	"github.com/steveyegge/beads/internal/jira"
@@ -388,18 +387,6 @@ func runLinearPush(cmd *cobra.Command, args []string) {
 		CheckReadonly("linear push")
 	}
 
-	if lockDir := beads.FindBeadsDir(); lockDir != "" {
-		syncLock, err := linear.AcquireSyncLock(lockDir, true)
-		if err != nil {
-			FatalError("acquiring sync lock: %v", err)
-		}
-		defer func() {
-			if err := syncLock.Release(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to release sync lock: %v\n", err)
-			}
-		}()
-	}
-
 	if err := ensureStoreActive(); err != nil {
 		FatalError("database not available: %v", err)
 	}
@@ -450,18 +437,6 @@ func runLinearPull(cmd *cobra.Command, args []string) {
 		CheckReadonly("linear pull")
 	}
 
-	if lockDir := beads.FindBeadsDir(); lockDir != "" {
-		syncLock, err := linear.AcquireSyncLock(lockDir, true)
-		if err != nil {
-			FatalError("acquiring sync lock: %v", err)
-		}
-		defer func() {
-			if err := syncLock.Release(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to release sync lock: %v\n", err)
-			}
-		}()
-	}
-
 	if err := ensureStoreActive(); err != nil {
 		FatalError("database not available: %v", err)
 	}
@@ -481,10 +456,7 @@ func runLinearPull(cmd *cobra.Command, args []string) {
 	engine := tracker.NewEngine(lt, store, actor)
 	engine.OnMessage = func(msg string) { fmt.Println("  " + msg) }
 	engine.OnWarning = func(msg string) { fmt.Fprintf(os.Stderr, "Warning: %s\n", msg) }
-	engine.PullHooks = buildLinearPullHooks(ctx, linearPullHookOptions{
-		DryRun: dryRun,
-		Actor:  actor,
-	})
+	engine.PullHooks = buildLinearPullHooks(ctx)
 
 	result, err := engine.Sync(ctx, tracker.SyncOptions{
 		Pull:              true,

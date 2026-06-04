@@ -15,7 +15,10 @@ import (
 func bdQuick(t *testing.T, bd, dir string, args ...string) string {
 	t.Helper()
 	fullArgs := append([]string{"q"}, args...)
-	out, err := bdRunWithFlockRetry(t, bd, dir, fullArgs...)
+	cmd := exec.Command(bd, fullArgs...)
+	cmd.Dir = dir
+	cmd.Env = bdEnv(dir)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("bd q %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
@@ -163,7 +166,10 @@ func TestEmbeddedQuickConcurrent(t *testing.T) {
 
 			for i := 0; i < issuesPerWorker; i++ {
 				title := fmt.Sprintf("w%d-quick-%d", worker, i)
-				out, err := bdRunWithFlockRetry(t, bd, dir, "q", title)
+				cmd := exec.Command(bd, "q", title)
+				cmd.Dir = dir
+				cmd.Env = bdEnv(dir)
+				out, err := cmd.CombinedOutput()
 				if err != nil {
 					r.err = fmt.Errorf("q %s: %v\n%s", title, err, out)
 					results[worker] = r

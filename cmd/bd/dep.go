@@ -158,11 +158,10 @@ Examples:
 				warnIfCyclesExist(fromStore)
 			}
 
-			if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-				Command:  "dep add",
-				IssueIDs: []string{fromID, toID},
-			}); err != nil {
-				FatalErrorRespectJSON("failed to commit: %v", err)
+			if isEmbeddedMode() && fromStore != nil {
+				if _, err := fromStore.CommitPending(ctx, actor); err != nil {
+					FatalErrorRespectJSON("failed to commit: %v", err)
+				}
 			}
 
 			if jsonOutput {
@@ -341,11 +340,10 @@ Examples:
 			warnIfCyclesExist(fromStore)
 		}
 
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "dep add",
-			IssueIDs: []string{fromID, toID},
-		}); err != nil {
-			FatalErrorRespectJSON("failed to commit: %v", err)
+		if isEmbeddedMode() && fromStore != nil {
+			if _, err := fromStore.CommitPending(ctx, actor); err != nil {
+				FatalErrorRespectJSON("failed to commit: %v", err)
+			}
 		}
 
 		if jsonOutput {
@@ -634,32 +632,18 @@ Examples:
 		}
 
 		// Resolve all IDs and group by store.
-		// In batch mode (>1 arg), unresolved IDs are skipped with a stderr
-		// warning so a single bad ID does not abort the whole batch — this
-		// is the ZFC-compliant transport behavior callers like the gascity
-		// supervisor's dep-cache refresh expect. Single-arg mode keeps the
-		// fatal behavior for backward compatibility.
 		type resolvedID struct {
 			fullID string
 			store  storage.DoltStorage
 			result *RoutedResult
 		}
 		var resolved []resolvedID
-		batchMode := len(args) > 1
 		for _, arg := range args {
 			routedResult, err := resolveAndGetIssueWithRouting(ctx, store, arg)
 			if err != nil {
-				if batchMode {
-					fmt.Fprintf(os.Stderr, "warning: resolving %s: %v (skipped)\n", arg, err)
-					continue
-				}
 				FatalErrorRespectJSON("resolving %s: %v", arg, err)
 			}
 			if routedResult == nil || routedResult.Issue == nil {
-				if batchMode {
-					fmt.Fprintf(os.Stderr, "warning: no issue found: %s (skipped)\n", arg)
-					continue
-				}
 				FatalErrorRespectJSON("no issue found: %s", arg)
 			}
 			depStore := store
@@ -671,16 +655,6 @@ Examples:
 				store:  depStore,
 				result: routedResult,
 			})
-		}
-		if batchMode && len(resolved) == 0 {
-			// No IDs resolved at all; emit empty result so callers can parse
-			// JSON cleanly without a special error path.
-			if jsonOutput {
-				outputJSON([]*types.Dependency{})
-				return
-			}
-			fmt.Fprintln(os.Stderr, "no resolvable issues in batch")
-			return
 		}
 		defer func() {
 			for _, r := range resolved {
@@ -864,11 +838,10 @@ var depRemoveCmd = &cobra.Command{
 			FatalErrorRespectJSON("%v", err)
 		}
 
-		if err := commitPendingIfEmbedded(ctx, fromStore, actor, doltAutoCommitParams{
-			Command:  "dep remove",
-			IssueIDs: []string{fullFromID, fullToID},
-		}); err != nil {
-			FatalErrorRespectJSON("failed to commit: %v", err)
+		if isEmbeddedMode() && fromStore != nil {
+			if _, err := fromStore.CommitPending(ctx, actor); err != nil {
+				FatalErrorRespectJSON("failed to commit: %v", err)
+			}
 		}
 
 		if jsonOutput {
@@ -1147,19 +1120,16 @@ func renderTree(tree []*types.TreeNode, maxDepth int, direction string) {
 		root = tree[0]
 	}
 
-	// Check if root has open blocking dependencies (GH#3565).
-	// Only genuine blockers (blocks, conditional-blocks, waits-for) count;
-	// parent-child, related, discovered-from, etc. do not block.
+	// Check if root has open children (meaning it's blocked, not ready)
 	if root != nil {
-		hasOpenBlockers := false
+		hasOpenChildren := false
 		for _, child := range children[root.ID] {
-			if (child.Status == types.StatusOpen || child.Status == types.StatusInProgress) &&
-				child.EdgeFromParent.IsBlockingEdge() {
-				hasOpenBlockers = true
+			if child.Status == types.StatusOpen || child.Status == types.StatusInProgress {
+				hasOpenChildren = true
 				break
 			}
 		}
-		r.rootBlocked = hasOpenBlockers
+		r.rootBlocked = hasOpenChildren
 	}
 
 	// Render recursively from root
@@ -1258,11 +1228,6 @@ func formatTreeNode(node *types.TreeNode, isBlocked bool) string {
 	// Build the line
 	line := fmt.Sprintf("%s: %s [P%d] (%s)",
 		idStr, node.Title, node.Priority, node.Status)
-
-	// Show edge type for non-root nodes (GH#3565)
-	if node.Depth > 0 && node.EdgeFromParent != "" {
-		line += " " + ui.RenderMuted(fmt.Sprintf("[%s]", node.EdgeFromParent))
-	}
 
 	// Add READY/BLOCKED indicator for root node
 	if node.Status == types.StatusOpen && node.Depth == 0 {

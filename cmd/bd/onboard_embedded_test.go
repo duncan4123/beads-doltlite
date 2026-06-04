@@ -24,15 +24,15 @@ func TestEmbeddedOnboard(t *testing.T) {
 		cmd := exec.Command(bd, "onboard")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd onboard failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd onboard failed: %v\n%s", err, out)
 		}
-		if len(strings.TrimSpace(stdout.String())) == 0 {
+		if len(strings.TrimSpace(string(out))) == 0 {
 			t.Error("expected non-empty onboard output")
 		}
-		if !strings.Contains(stdout.String(), "prime") && !strings.Contains(stdout.String(), "bd") {
-			t.Errorf("expected 'prime' or 'bd' in onboard output: %s", stdout.String())
+		if !strings.Contains(string(out), "prime") && !strings.Contains(string(out), "bd") {
+			t.Errorf("expected 'prime' or 'bd' in onboard output: %s", out)
 		}
 	})
 }

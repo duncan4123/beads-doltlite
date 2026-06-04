@@ -90,8 +90,10 @@ Example:
 				}
 			}
 		}
-		if autoMerge && !dryRun {
-			commandDidWrite.Store(true)
+		if isEmbeddedMode() && autoMerge && !dryRun && store != nil {
+			if _, err := store.CommitPending(ctx, actor); err != nil {
+				FatalError("failed to commit: %v", err)
+			}
 		}
 		// Output results
 		if jsonOutput {

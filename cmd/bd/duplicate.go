@@ -105,7 +105,11 @@ func runDuplicate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to close duplicate: %w", err)
 	}
 
-	commandDidWrite.Store(true)
+	if isEmbeddedMode() && store != nil {
+		if _, err := store.CommitPending(ctx, actor); err != nil {
+			return fmt.Errorf("failed to commit: %w", err)
+		}
+	}
 
 	if isJSONOutput() {
 		outputJSON(map[string]interface{}{
@@ -169,7 +173,11 @@ func runSupersede(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to close superseded issue: %w", err)
 	}
 
-	commandDidWrite.Store(true)
+	if isEmbeddedMode() && store != nil {
+		if _, err := store.CommitPending(ctx, actor); err != nil {
+			return fmt.Errorf("failed to commit: %w", err)
+		}
+	}
 
 	if isJSONOutput() {
 		outputJSON(map[string]interface{}{

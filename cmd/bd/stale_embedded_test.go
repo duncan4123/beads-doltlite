@@ -21,11 +21,11 @@ func bdStale(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd stale %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd stale %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdStaleFail runs "bd stale" expecting failure.
@@ -49,11 +49,11 @@ func bdStaleJSON(t *testing.T, bd, dir string, args ...string) []map[string]inte
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd stale --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd stale --json %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	s := strings.TrimSpace(stdout.String())
+	s := strings.TrimSpace(string(out))
 	start := strings.Index(s, "[")
 	if start < 0 {
 		t.Fatalf("no JSON array in stale output: %s", s)

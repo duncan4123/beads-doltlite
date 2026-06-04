@@ -18,11 +18,11 @@ func bdGraph(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd graph %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd graph %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 func TestEmbeddedGraph(t *testing.T) {
@@ -106,12 +106,12 @@ func TestEmbeddedGraph(t *testing.T) {
 		cmd := exec.Command(bd, fullArgs...)
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("graph --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("graph --json failed: %v\n%s", err, out)
 		}
-		if !strings.Contains(stdout.String(), epic.ID) {
-			t.Errorf("expected epic ID in JSON output: %s", stdout.String())
+		if !strings.Contains(string(out), epic.ID) {
+			t.Errorf("expected epic ID in JSON output: %s", out)
 		}
 	})
 

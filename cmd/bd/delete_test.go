@@ -106,6 +106,9 @@ func TestUniqueStrings(t *testing.T) {
 }
 
 func TestBulkDeleteNoResurrection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
@@ -194,6 +197,9 @@ func testGitCmd(t *testing.T, dir string, args ...string) {
 
 // TestDeleteIssueWrapper tests the deleteIssue wrapper function
 func TestDeleteIssueWrapper(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
@@ -324,6 +330,9 @@ func TestDeleteIssueWrapper(t *testing.T) {
 }
 
 func TestDeleteIssueUnsupportedStorage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	if testDoltServerPort == 0 {
 		t.Skip("skipping: Dolt test container not available")
 	}

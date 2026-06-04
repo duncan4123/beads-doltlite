@@ -208,7 +208,12 @@ This is used by 'bd done --phase-complete' to register for gate wake notificatio
 			FatalError("updating gate: %v", err)
 		}
 
-		commandDidWrite.Store(true)
+		// Embedded mode: flush Dolt commit.
+		if isEmbeddedMode() && store != nil {
+			if _, err := store.CommitPending(ctx, actor); err != nil {
+				FatalError("failed to commit: %v", err)
+			}
+		}
 
 		fmt.Printf("%s Added waiter to gate %s: %s\n", ui.RenderPass("✓"), gateID, waiter)
 	},
@@ -416,7 +421,12 @@ Use --reason to provide context for why the gate was resolved.`,
 			FatalError("closing gate: %v", err)
 		}
 
-		commandDidWrite.Store(true)
+		// Embedded mode: flush Dolt commit.
+		if isEmbeddedMode() && store != nil {
+			if _, err := store.CommitPending(ctx, actor); err != nil {
+				FatalError("failed to commit: %v", err)
+			}
+		}
 
 		fmt.Printf("%s Gate resolved: %s\n", ui.RenderPass("✓"), gateID)
 		if reason != "" {
@@ -848,7 +858,12 @@ func closeGate(_ interface{}, gateID, reason string) error {
 	if err := store.CloseIssue(rootCtx, gateID, reason, actor, ""); err != nil {
 		return err
 	}
-	commandDidWrite.Store(true)
+	// Embedded mode: flush Dolt commit.
+	if isEmbeddedMode() && store != nil {
+		if _, err := store.CommitPending(rootCtx, actor); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

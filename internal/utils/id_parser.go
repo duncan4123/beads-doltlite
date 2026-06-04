@@ -41,13 +41,11 @@ func ResolvePartialID(ctx context.Context, store storage.Storage, input string) 
 		return "", fmt.Errorf("cannot resolve issue ID %q: storage is nil", input)
 	}
 
-	// Fast path: Use SearchIssues with exact ID filter (GH#942).
-	// This uses the same query path as "bd list --id", ensuring consistency.
-	// Previously we used GetIssue which could fail in cases where SearchIssues
-	// with filter.IDs succeeded, likely due to subtle query differences.
-	exactFilter := types.IssueFilter{IDs: []string{input}}
-	if issues, err := store.SearchIssues(ctx, "", exactFilter); err == nil && len(issues) > 0 {
-		return issues[0].ID, nil
+	// Fast path: exact ID lookup should be an indexed primary-key read. This
+	// keeps exact probes such as "bd show abc-123" from paying the broader
+	// partial-ID search path when the issue is absent.
+	if issue, err := store.GetIssue(ctx, input); err == nil && issue != nil {
+		return issue.ID, nil
 	}
 
 	// Get the configured prefix
@@ -99,10 +97,11 @@ func ResolvePartialID(ctx context.Context, store storage.Storage, input string) 
 		normalizedID = prefixWithHyphen + input
 	}
 
-	// Try exact match on normalized ID using SearchIssues (GH#942)
-	normalizedFilter := types.IssueFilter{IDs: []string{normalizedID}}
-	if issues, err := store.SearchIssues(ctx, "", normalizedFilter); err == nil && len(issues) > 0 {
-		return issues[0].ID, nil
+	// Try exact match on normalized ID before falling back to substring search.
+	if normalizedID != input {
+		if issue, err := store.GetIssue(ctx, normalizedID); err == nil && issue != nil {
+			return issue.ID, nil
+		}
 	}
 
 	// If exact match failed, try substring search.
@@ -111,13 +110,9 @@ func ResolvePartialID(ctx context.Context, store storage.Storage, input string) 
 	// On large databases (23k+ issues over MySQL wire protocol), loading all
 	// issues took 60+ seconds; with SQL filtering it's near-instant.
 	hashPart := strings.TrimPrefix(normalizedID, prefixWithHyphen)
-	searchPart, ok := partialIDSearchPart(hashPart)
-	if !ok {
-		return "", fmt.Errorf("no issue found matching %q", input)
-	}
 
 	filter := types.IssueFilter{}
-	issues, err := store.SearchIssues(ctx, searchPart, filter)
+	issues, err := store.SearchIssues(ctx, hashPart, filter)
 	if err != nil {
 		return "", fmt.Errorf("failed to search issues: %w", err)
 	}
@@ -166,7 +161,7 @@ func ResolvePartialID(ctx context.Context, store storage.Storage, input string) 
 	if len(matches) == 0 {
 		ephTrue := true
 		wispFilter := types.IssueFilter{Ephemeral: &ephTrue}
-		if wisps, wispErr := store.SearchIssues(ctx, searchPart, wispFilter); wispErr == nil {
+		if wisps, wispErr := store.SearchIssues(ctx, hashPart, wispFilter); wispErr == nil {
 			for _, w := range wisps {
 				if w.ID == input {
 					return w.ID, nil
@@ -199,32 +194,6 @@ func ResolvePartialID(ctx context.Context, store storage.Storage, input string) 
 	}
 
 	return matches[0], nil
-}
-
-func partialIDSearchPart(hashPart string) (string, bool) {
-	if !looksLikePartialIDHash(hashPart) {
-		return "", false
-	}
-	searchPart := hashPart
-	if idx := strings.LastIndex(hashPart, "-"); idx >= 0 && idx < len(hashPart)-1 {
-		suffix := hashPart[idx+1:]
-		if looksLikePartialIDHash(suffix) {
-			searchPart = suffix
-		}
-	}
-	return searchPart, true
-}
-
-func looksLikePartialIDHash(input string) bool {
-	if input == "" || strings.Contains(input, " ") {
-		return false
-	}
-	for _, c := range input {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '.') {
-			return false
-		}
-	}
-	return true
 }
 
 // ResolvePartialIDs resolves multiple potentially partial issue IDs.

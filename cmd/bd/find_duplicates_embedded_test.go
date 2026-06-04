@@ -19,11 +19,11 @@ func bdFindDups(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd find-duplicates %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd find-duplicates %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdFindDupsFail runs "bd find-duplicates" expecting failure.
@@ -47,11 +47,11 @@ func bdFindDupsJSON(t *testing.T, bd, dir string, args ...string) map[string]int
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd find-duplicates --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd find-duplicates --json %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	s := strings.TrimSpace(stdout.String())
+	s := strings.TrimSpace(string(out))
 	start := strings.Index(s, "{")
 	if start < 0 {
 		t.Fatalf("no JSON object in find-duplicates output: %s", s)
@@ -260,12 +260,12 @@ func TestEmbeddedFindDuplicates(t *testing.T) {
 		cmd := exec.Command(bd, "find-dups", "--json", "--threshold", "0.3")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd find-dups alias failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd find-dups alias failed: %v\n%s", err, out)
 		}
-		if !strings.Contains(stdout.String(), "pairs") {
-			t.Errorf("expected JSON with 'pairs' from alias: %s", stdout.String())
+		if !strings.Contains(string(out), "pairs") {
+			t.Errorf("expected JSON with 'pairs' from alias: %s", out)
 		}
 	})
 
@@ -322,15 +322,15 @@ func TestEmbeddedFindDuplicatesConcurrent(t *testing.T) {
 			cmd := exec.Command(bd, args...)
 			cmd.Dir = dir
 			cmd.Env = bdEnv(dir)
-			stdout, stderr, err := runCommandBuffers(t, cmd)
+			out, err := cmd.CombinedOutput()
 			if err != nil {
-				r.err = fmt.Errorf("worker %d find-duplicates: %v\nstdout:\n%s\nstderr:\n%s", worker, err, stdout.String(), stderr.String())
+				r.err = fmt.Errorf("worker %d find-duplicates: %v\n%s", worker, err, out)
 				results[worker] = r
 				return
 			}
 
 			// Verify JSON is parseable
-			s := strings.TrimSpace(stdout.String())
+			s := strings.TrimSpace(string(out))
 			start := strings.Index(s, "{")
 			if start < 0 {
 				r.err = fmt.Errorf("worker %d: no JSON in output: %s", worker, s)

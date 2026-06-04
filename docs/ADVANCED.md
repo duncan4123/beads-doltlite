@@ -288,7 +288,7 @@ See [DOLT.md](DOLT.md) for details on how the Dolt backend handles sync natively
 
 > **Note:** Custom table extensions via `UnderlyingDB()` are a **SQLite-only** pattern.
 > With the Dolt backend, build standalone integration tools using bd's CLI with `--json`
-> flags, or use `bd query` for direct SQL access.
+> flags, or use `bd query` for direct SQL access. See [EXTENDING.md](EXTENDING.md) for details.
 
 For SQLite-backend users, you can extend bd with your own tables and queries:
 
@@ -297,7 +297,7 @@ For SQLite-backend users, you can extend bd with your own tables and queries:
 - Implement custom workflows
 - Create reports and analytics
 
-See [examples/bd-example-extension-go](../examples/bd-example-extension-go/README.md) for a working extension example.
+**See [EXTENDING.md](EXTENDING.md) for complete documentation.**
 
 ## Architecture: Storage, RPC, and MCP
 
@@ -329,4 +329,4 @@ Understanding the role of each component:
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
 - **[FAQ.md](FAQ.md)** - Frequently asked questions
 - **[CONFIG.md](CONFIG.md)** - Configuration system guide
-- **[examples/bd-example-extension-go](../examples/bd-example-extension-go/README.md)** - Working SQLite extension example
+- **[EXTENDING.md](EXTENDING.md)** - Database extension patterns

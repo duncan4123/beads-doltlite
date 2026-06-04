@@ -41,12 +41,12 @@ func TestNewDoltStoreFromConfig_NoMetadata(t *testing.T) {
 	defer store.Close()
 }
 
-// TestEmbeddedOpen_EmptyDatabaseRejected verifies that embeddeddolt.Open fails
+// TestEmbeddedNew_EmptyDatabaseRejected verifies that embeddeddolt.New fails
 // with a clear error when called with an empty database name, rather than
 // deferring to a confusing "no database selected" SQL error.
 // Belt-and-suspenders defense for be-sy8 / GH#2988.
-func TestEmbeddedOpen_EmptyDatabaseRejected(t *testing.T) {
-	_, err := embeddeddolt.Open(t.Context(), t.TempDir(), "", "main")
+func TestEmbeddedNew_EmptyDatabaseRejected(t *testing.T) {
+	_, err := embeddeddolt.New(t.Context(), t.TempDir(), "", "main")
 	if err == nil {
 		t.Fatal("expected error for empty database name")
 	}

@@ -10,7 +10,8 @@ These tests verify that all subprocess calls use stdin=DEVNULL.
 
 import asyncio
 import subprocess
-from unittest.mock import AsyncMock, MagicMock, patch
+import sys
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 

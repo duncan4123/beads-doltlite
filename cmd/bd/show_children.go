@@ -9,7 +9,6 @@ import (
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
-	"github.com/steveyegge/beads/internal/uimd"
 )
 
 // showIssueChildren displays only the children of the specified issue(s)
@@ -117,7 +116,7 @@ func showIssueAsOf(ctx context.Context, args []string, ref string, shortMode boo
 		fmt.Println(formatIssueMetadata(issue))
 
 		if issue.Description != "" {
-			fmt.Printf("\n%s\n%s\n", ui.RenderBold("DESCRIPTION"), uimd.RenderMarkdown(issue.Description))
+			fmt.Printf("\n%s\n%s\n", ui.RenderBold("DESCRIPTION"), ui.RenderMarkdown(issue.Description))
 		}
 		fmt.Println()
 	}

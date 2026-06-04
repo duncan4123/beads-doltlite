@@ -22,8 +22,8 @@ The Linear integration provides:
 ### 2. Configure bd
 
 ```bash
-# Set API key via environment variable (recommended — avoids git exposure)
-export LINEAR_API_KEY="lin_api_YOUR_API_KEY_HERE"  # add to ~/.secrets or ~/.zshrc
+# Set API key (or use LINEAR_API_KEY environment variable)
+bd config set linear.api_key "lin_api_YOUR_API_KEY_HERE"
 
 # Set team ID
 bd config set linear.team_id "YOUR_TEAM_UUID"
@@ -58,11 +58,11 @@ Linear uses Personal API Keys for authentication. Create one at:
 Store securely:
 
 ```bash
-# Recommended: Environment variable (avoids git exposure)
-export LINEAR_API_KEY="lin_api_..."  # add to ~/.secrets or ~/.zshrc
-
-# Alternative: bd config (only if config.yaml is NOT git-tracked)
+# Option 1: bd config (stored in database)
 bd config set linear.api_key "lin_api_..."
+
+# Option 2: Environment variable
+export LINEAR_API_KEY="lin_api_..."
 ```
 
 ### Team ID
@@ -87,15 +87,7 @@ bd linear sync --pull --relations
 bd linear sync --pull --state open    # Only open issues
 bd linear sync --pull --state closed  # Only closed issues
 bd linear sync --pull --state all     # All issues (default)
-
-# Reconstruct Linear project milestones as local epic parents
-bd linear sync --pull --milestones
 ```
-
-With `--milestones`, bd creates or reuses one local epic per Linear
-`projectMilestone`, then adds parent-child links from each pulled issue to its
-milestone epic. Milestone epics are marked as Linear milestone records and are
-skipped by later Linear pushes.
 
 ### Push Only (bd → Linear)
 
@@ -279,7 +271,7 @@ First-time import of existing Linear issues:
 
 ```bash
 # Configure credentials
-export LINEAR_API_KEY="lin_api_..."  # add to ~/.secrets or ~/.zshrc
+bd config set linear.api_key "lin_api_..."
 bd config set linear.team_id "team-uuid"
 
 # Check status
@@ -439,8 +431,9 @@ linear.relation_map.related   # (default: related)
 Set the API key:
 
 ```bash
-# Recommended: environment variable
-export LINEAR_API_KEY="lin_api_YOUR_KEY"  # add to ~/.secrets or ~/.zshrc
+bd config set linear.api_key "lin_api_YOUR_KEY"
+# Or
+export LINEAR_API_KEY="lin_api_YOUR_KEY"
 ```
 
 ### "Linear team ID not configured"
@@ -495,7 +488,7 @@ For large projects, initial sync fetches all issues. Subsequent syncs are increm
 ```bash
 # Initial setup
 $ bd init --quiet
-$ export LINEAR_API_KEY="lin_api_abc123..."  # add to ~/.secrets or ~/.zshrc
+$ bd config set linear.api_key "lin_api_abc123..."
 $ bd config set linear.team_id "team-uuid-456"
 
 # Check status

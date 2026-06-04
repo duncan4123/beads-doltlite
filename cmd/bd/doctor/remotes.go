@@ -1,23 +1,14 @@
 package doctor
 
 import (
-	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/steveyegge/beads/internal/configfile"
-	"github.com/steveyegge/beads/internal/doltremote"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
-)
-
-var (
-	querySQLRemotesForDoctor = querySQLRemotes
-	listCLIRemotesForDoctor  = doltutil.ListCLIRemotes
 )
 
 // CheckRemoteConsistency compares remotes registered in the SQL server
@@ -37,7 +28,7 @@ func CheckRemoteConsistency(repoPath string) DoctorCheck {
 	}
 
 	// Get SQL remotes via direct connection
-	sqlRemotes, sqlErr := querySQLRemotesForDoctor(beadsDir)
+	sqlRemotes, sqlErr := querySQLRemotes(beadsDir)
 	if sqlErr != nil {
 		return DoctorCheck{
 			Name:     "Remote Consistency",
@@ -51,7 +42,7 @@ func CheckRemoteConsistency(repoPath string) DoctorCheck {
 	doltDir := doltserver.ResolveDoltDir(beadsDir)
 	dbName := cfg.GetDoltDatabase()
 	dbDir := filepath.Join(doltDir, dbName)
-	cliRemotes, cliErr := listCLIRemotesForDoctor(dbDir)
+	cliRemotes, cliErr := doltutil.ListCLIRemotes(dbDir)
 	if cliErr != nil {
 		return DoctorCheck{
 			Name:     "Remote Consistency",
@@ -67,7 +58,7 @@ func CheckRemoteConsistency(repoPath string) DoctorCheck {
 			Name:     "Remote Consistency",
 			Status:   StatusWarning,
 			Message:  "No remotes configured",
-			Detail:   remoteAdoptionDetail(repoPath),
+			Detail:   "Add a remote with: bd dolt remote add origin <url>",
 			Category: CategoryData,
 		}
 	}
@@ -127,25 +118,6 @@ func CheckRemoteConsistency(repoPath string) DoctorCheck {
 		Fix:      fix,
 		Category: CategoryData,
 	}
-}
-
-func remoteAdoptionDetail(repoPath string) string {
-	if originURL := gitOriginRemoteURL(repoPath); originURL != "" {
-		remoteURL := doltremote.Normalize(originURL)
-		return fmt.Sprintf("git origin is configured. Adopt it with: bd dolt remote add origin %s", remoteURL)
-	}
-	return "Add a remote with: bd dolt remote add origin <url>"
-}
-
-func gitOriginRemoteURL(repoPath string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "remote", "get-url", "origin")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // querySQLRemotes gets remotes from the SQL server.

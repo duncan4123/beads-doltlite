@@ -20,7 +20,7 @@ Data storage and sync are handled by Dolt (a version-controlled SQL database).
 
 ```
 .beads/
-├── config.yaml        # Project config (git-tracked)
+├── config.toml        # Project config (git-tracked)
 ├── metadata.json      # Backend metadata (git-tracked)
 └── dolt/              # Dolt database and server data (gitignored)
 ```

@@ -10,11 +10,6 @@ import (
 
 func buildBDForTest(t *testing.T) string {
 	t.Helper()
-	if prebuilt, err := findPrebuiltBDBinary(); err != nil {
-		t.Fatal(err)
-	} else if prebuilt != "" {
-		return prebuilt
-	}
 	exeName := "bd"
 	if runtime.GOOS == "windows" {
 		exeName = "bd.exe"

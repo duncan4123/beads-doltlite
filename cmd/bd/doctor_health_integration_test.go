@@ -11,6 +11,9 @@ import (
 )
 
 func TestDoctorCheckHealthReportsVersionMismatchOnRepoLocalPort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow integration test in short mode")
+	}
 	if runtime.GOOS == windowsOS {
 		t.Skip("doctor health integration test not supported on windows")
 	}

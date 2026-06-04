@@ -9,6 +9,9 @@ import (
 )
 
 func TestShow_ExternalRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping CLI test in short mode")
+	}
 
 	tmpDir := setupCLITestDB(t)
 
@@ -37,6 +40,9 @@ func TestShow_ExternalRef(t *testing.T) {
 }
 
 func TestShow_NoExternalRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping CLI test in short mode")
+	}
 
 	tmpDir := setupCLITestDB(t)
 
@@ -61,6 +67,9 @@ func TestShow_NoExternalRef(t *testing.T) {
 }
 
 func TestShow_IDFlag(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping CLI test in short mode")
+	}
 
 	tmpDir := setupCLITestDB(t)
 
@@ -103,6 +112,9 @@ func TestShow_IDFlag(t *testing.T) {
 }
 
 func TestShow_NotFoundExitsNonZero(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping CLI test in short mode")
+	}
 
 	tmpDir := setupCLITestDB(t)
 
@@ -114,6 +126,9 @@ func TestShow_NotFoundExitsNonZero(t *testing.T) {
 }
 
 func TestShow_NotFoundJSON(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping CLI test in short mode")
+	}
 
 	tmpDir := setupCLITestDB(t)
 

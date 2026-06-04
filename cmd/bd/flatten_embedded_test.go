@@ -18,11 +18,11 @@ func bdFlatten(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd flatten %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd flatten %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdFlattenFail runs "bd flatten" expecting failure.
@@ -118,12 +118,12 @@ func TestEmbeddedFlatten(t *testing.T) {
 		cmd := exec.Command(bd, "count")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		countOut, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd count after flatten failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd count after flatten failed: %v\n%s", err, countOut)
 		}
-		if strings.Contains(stdout.String(), ": 0") {
-			t.Errorf("expected issues to survive flatten: %s", stdout.String())
+		if strings.Contains(string(countOut), ": 0") {
+			t.Errorf("expected issues to survive flatten: %s", countOut)
 		}
 	})
 }

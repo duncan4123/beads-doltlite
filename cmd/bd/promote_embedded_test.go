@@ -19,11 +19,11 @@ func bdPromote(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd promote %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd promote %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdPromoteFail runs "bd promote" expecting failure.
@@ -95,11 +95,11 @@ func TestEmbeddedPromoteCLI(t *testing.T) {
 		cmd := exec.Command(bd, "promote", issue.ID, "--json")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd promote --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd promote --json failed: %v\n%s", err, out)
 		}
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.Index(s, "{")
 		if start < 0 {
 			t.Fatalf("no JSON object in output: %s", s)
@@ -174,7 +174,6 @@ func TestEmbeddedPromoteCLIConcurrent(t *testing.T) {
 
 	type workerResult struct {
 		worker int
-		out    string
 		err    error
 	}
 
@@ -191,9 +190,8 @@ func TestEmbeddedPromoteCLIConcurrent(t *testing.T) {
 			cmd.Dir = dir
 			cmd.Env = bdEnv(dir)
 			out, err := cmd.CombinedOutput()
-			r.out = string(out)
 			if err != nil {
-				r.err = fmt.Errorf("promote %s: %v", issueIDs[worker], err)
+				r.err = fmt.Errorf("promote %s: %v\n%s", issueIDs[worker], err, out)
 			}
 
 			results[worker] = r
@@ -201,18 +199,30 @@ func TestEmbeddedPromoteCLIConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	// The driver handles concurrency internally — all workers should succeed.
+	var successes int
 	for _, r := range results {
 		if r.err != nil {
-			t.Errorf("worker %d failed: %v", r.worker, r.err)
+			if !strings.Contains(r.err.Error(), "one writer at a time") {
+				t.Errorf("worker %d failed: %v", r.worker, r.err)
+			}
+			continue
 		}
+		successes++
 	}
+	if successes == 0 {
+		t.Fatal("all workers failed; expected at least 1 success")
+	}
+	t.Logf("%d/%d workers succeeded (flock contention expected)", successes, numWorkers)
 
-	// Verify all issues are permanent.
-	for i, id := range issueIDs {
+	// Verify only successful workers' issues are permanent
+	for _, r := range results {
+		if r.err != nil {
+			continue
+		}
+		id := issueIDs[r.worker]
 		got := bdShow(t, bd, dir, id)
 		if got.Ephemeral {
-			t.Errorf("expected %s (worker %d) to be permanent after promote", id, i)
+			t.Errorf("expected %s to be permanent after promote", id)
 		}
 	}
 }

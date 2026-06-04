@@ -66,7 +66,12 @@ var addTodoCmd = &cobra.Command{
 			FatalError("failed to create TODO: %v", err)
 		}
 
-		commandDidWrite.Store(true)
+		// Embedded mode: flush Dolt commit.
+		if isEmbeddedMode() && getStore() != nil {
+			if _, err := getStore().CommitPending(ctx, getActorWithGit()); err != nil {
+				FatalError("failed to commit: %v", err)
+			}
+		}
 
 		if jsonOutput {
 			data, err := json.MarshalIndent(issue, "", "  ")
@@ -169,8 +174,11 @@ var doneTodoCmd = &cobra.Command{
 			closedIDs = append(closedIDs, issueID)
 		}
 
-		if len(closedIDs) > 0 {
-			commandDidWrite.Store(true)
+		// Embedded mode: flush Dolt commit.
+		if isEmbeddedMode() && len(closedIDs) > 0 && getStore() != nil {
+			if _, err := getStore().CommitPending(ctx, getActorWithGit()); err != nil {
+				FatalError("failed to commit: %v", err)
+			}
 		}
 
 		if jsonOutput {

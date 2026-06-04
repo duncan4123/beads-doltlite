@@ -21,11 +21,11 @@ func bdGate(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd gate %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd gate %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdGateFail runs "bd gate" expecting failure.
@@ -49,11 +49,11 @@ func bdGateListJSON(t *testing.T, bd, dir string, args ...string) []map[string]i
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd gate list --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd gate list --json %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	s := strings.TrimSpace(stdout.String())
+	s := strings.TrimSpace(string(out))
 	start := strings.Index(s, "[")
 	if start < 0 {
 		return nil
@@ -388,13 +388,13 @@ func TestEmbeddedGateCreate(t *testing.T) {
 		cmd := exec.Command(bd, "gate", "create", "--blocks", task.ID, "--json")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd gate create --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd gate create --json failed: %v\n%s", err, out)
 		}
 
 		var gate types.Issue
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.Index(s, "{")
 		if start < 0 {
 			t.Fatalf("no JSON in output: %s", s)
@@ -417,13 +417,13 @@ func TestEmbeddedGateCreate(t *testing.T) {
 			"--type", "timer", "--timeout", "2h", "--reason", "Wait for cooldown", "--json")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd gate create --type=timer failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd gate create --type=timer failed: %v\n%s", err, out)
 		}
 
 		var gate types.Issue
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.Index(s, "{")
 		if err := json.Unmarshal([]byte(s[start:]), &gate); err != nil {
 			t.Fatalf("parse gate JSON: %v\n%s", err, s)
@@ -446,13 +446,13 @@ func TestEmbeddedGateCreate(t *testing.T) {
 			"--type", "gh:pr", "--await-id", "42", "--json")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd gate create --type=gh:pr failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd gate create --type=gh:pr failed: %v\n%s", err, out)
 		}
 
 		var gate types.Issue
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.Index(s, "{")
 		if err := json.Unmarshal([]byte(s[start:]), &gate); err != nil {
 			t.Fatalf("parse gate JSON: %v\n%s", err, s)
@@ -483,12 +483,12 @@ func TestEmbeddedGateCreate(t *testing.T) {
 		cmd := exec.Command(bd, "ready")
 		cmd.Dir = freshDir
 		cmd.Env = bdEnv(freshDir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd ready failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd ready failed: %v\n%s", err, out)
 		}
-		if !strings.Contains(stdout.String(), "Ready test task") {
-			t.Fatalf("task should appear in ready before gate: %s", stdout.String())
+		if !strings.Contains(string(out), "Ready test task") {
+			t.Fatalf("task should appear in ready before gate: %s", out)
 		}
 
 		// Create gate blocking the task
@@ -498,16 +498,13 @@ func TestEmbeddedGateCreate(t *testing.T) {
 		cmd = exec.Command(bd, "ready")
 		cmd.Dir = freshDir
 		cmd.Env = bdEnv(freshDir)
-		stdout.Reset()
-		stderr.Reset()
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
+		out, err = cmd.CombinedOutput()
+		if err != nil {
 			// bd ready exits 0 even with no results
-			t.Fatalf("bd ready failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd ready failed: %v\n%s", err, out)
 		}
-		if strings.Contains(stdout.String(), "Ready test task") {
-			t.Errorf("task should NOT appear in ready while gate is open: %s", stdout.String())
+		if strings.Contains(string(out), "Ready test task") {
+			t.Errorf("task should NOT appear in ready while gate is open: %s", out)
 		}
 	})
 
@@ -544,12 +541,12 @@ func TestEmbeddedGateCreate(t *testing.T) {
 		cmd := exec.Command(bd, "ready")
 		cmd.Dir = freshDir
 		cmd.Env = bdEnv(freshDir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd ready failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd ready failed: %v\n%s", err, out)
 		}
-		if !strings.Contains(stdout.String(), "Unblock test task") {
-			t.Errorf("task should reappear in ready after gate resolved: %s", stdout.String())
+		if !strings.Contains(string(out), "Unblock test task") {
+			t.Errorf("task should reappear in ready after gate resolved: %s", out)
 		}
 	})
 
@@ -622,7 +619,10 @@ func TestEmbeddedGateConcurrent(t *testing.T) {
 
 			// Each worker: create a gate, add a waiter, resolve it
 			title := fmt.Sprintf("w%d-gate", worker)
-			out, err := bdRunWithFlockRetry(t, bd, dir, "create", "--silent", title, "--type", "gate")
+			cmd := exec.Command(bd, "create", "--silent", title, "--type", "gate")
+			cmd.Dir = dir
+			cmd.Env = bdEnv(dir)
+			out, err := cmd.CombinedOutput()
 			if err != nil {
 				r.err = fmt.Errorf("create gate: %v\n%s", err, out)
 				results[worker] = r
@@ -631,7 +631,7 @@ func TestEmbeddedGateConcurrent(t *testing.T) {
 			gateID := strings.TrimSpace(string(out))
 
 			// Add waiter
-			cmd := exec.Command(bd, "gate", "add-waiter", gateID, fmt.Sprintf("agent-%d", worker))
+			cmd = exec.Command(bd, "gate", "add-waiter", gateID, fmt.Sprintf("agent-%d", worker))
 			cmd.Dir = dir
 			cmd.Env = bdEnv(dir)
 			out, err = cmd.CombinedOutput()

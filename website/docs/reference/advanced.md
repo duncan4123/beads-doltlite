@@ -89,7 +89,7 @@ storage.UnderlyingDB().Exec(`
 `)
 ```
 
-See the [bd-example-extension-go example](https://github.com/gastownhall/beads/blob/main/examples/bd-example-extension-go/README.md) for a working extension.
+See [EXTENDING.md](https://github.com/gastownhall/beads/blob/main/docs/EXTENDING.md).
 
 ## Event System
 

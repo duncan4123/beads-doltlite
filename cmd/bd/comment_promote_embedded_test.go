@@ -16,11 +16,11 @@ func bdComment(t *testing.T, bd, dir string, args ...string) string {
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd comments add %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+		t.Fatalf("bd comments add %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 // bdCommentList runs "bd comments list" and returns stdout.
@@ -29,11 +29,11 @@ func bdCommentList(t *testing.T, bd, dir, issueID string) string {
 	cmd := exec.Command(bd, "comments", "list", issueID)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("bd comments list %s failed: %v\nstdout:\n%s\nstderr:\n%s", issueID, err, stdout.String(), stderr.String())
+		t.Fatalf("bd comments list %s failed: %v\n%s", issueID, err, out)
 	}
-	return stdout.String()
+	return string(out)
 }
 
 func TestEmbeddedComments(t *testing.T) {

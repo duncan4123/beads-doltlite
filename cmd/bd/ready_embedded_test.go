@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/steveyegge/beads/internal/types"
 )
 
 func TestEmbeddedReady(t *testing.T) {
@@ -28,42 +26,16 @@ func TestEmbeddedReady(t *testing.T) {
 
 	// ===== Default =====
 
-	t.Run("ready_includes_open_issue_with_zero_dependencies", func(t *testing.T) {
-		issue := bdCreate(t, bd, dir, "GH3268 zero dependency ready issue", "--type", "task", "--label", "gh3268-zero-deps")
-
-		cmd := exec.Command(bd, "ready", "--json", "--label", "gh3268-zero-deps")
-		cmd.Dir = dir
-		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
-		if err != nil {
-			t.Fatalf("bd ready --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
-		}
-
-		var ready []types.IssueWithCounts
-		if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &ready); err != nil {
-			t.Fatalf("parse ready JSON: %v\n%s", err, stdout.String())
-		}
-		if len(ready) != 1 {
-			t.Fatalf("ready count = %d, want 1: %s", len(ready), stdout.String())
-		}
-		if ready[0].ID != issue.ID {
-			t.Fatalf("ready ID = %s, want %s", ready[0].ID, issue.ID)
-		}
-		if ready[0].DependencyCount != 0 {
-			t.Fatalf("dependency_count = %d, want 0", ready[0].DependencyCount)
-		}
-	})
-
 	t.Run("ready_default", func(t *testing.T) {
 		cmd := exec.Command(bd, "ready")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd ready failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd ready failed: %v\n%s", err, out)
 		}
-		if !strings.Contains(stdout.String(), "Ready test issue") {
-			t.Errorf("expected issue in ready output: %s", stdout.String())
+		if !strings.Contains(string(out), "Ready test issue") {
+			t.Errorf("expected issue in ready output: %s", out)
 		}
 	})
 
@@ -73,11 +45,11 @@ func TestEmbeddedReady(t *testing.T) {
 		cmd := exec.Command(bd, "ready", "--json")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd ready --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd ready --json failed: %v\n%s", err, out)
 		}
-		s := strings.TrimSpace(stdout.String())
+		s := strings.TrimSpace(string(out))
 		start := strings.IndexAny(s, "[{")
 		if start < 0 {
 			t.Fatalf("no JSON in ready --json output: %s", s)
@@ -109,52 +81,6 @@ func TestEmbeddedReady(t *testing.T) {
 		}
 	})
 
-	t.Run("ready_claim_json", func(t *testing.T) {
-		issue := bdCreate(t, bd, dir, "Ready claim json", "--type", "task", "--label", "ready-claim-json")
-
-		cmd := exec.Command(bd, "ready", "--claim", "--json", "--label", "missing-label")
-		cmd.Dir = dir
-		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
-		if err != nil {
-			t.Fatalf("bd ready --claim --json with no matches failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
-		}
-		var empty []types.IssueWithCounts
-		if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &empty); err != nil {
-			t.Fatalf("parse empty claim JSON: %v\n%s", err, stdout.String())
-		}
-		if len(empty) != 0 {
-			t.Fatalf("expected no claimed issues for unmatched label, got %d", len(empty))
-		}
-
-		cmd = exec.Command(bd, "ready", "--claim", "--json", "--label", "ready-claim-json")
-		cmd.Dir = dir
-		cmd.Env = bdEnv(dir)
-		stdout.Reset()
-		stderr.Reset()
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("bd ready --claim --json failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
-		}
-		var claimed []types.IssueWithCounts
-		if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &claimed); err != nil {
-			t.Fatalf("parse claim JSON: %v\n%s", err, stdout.String())
-		}
-		if len(claimed) != 1 {
-			t.Fatalf("expected one claimed issue, got %d: %s", len(claimed), stdout.String())
-		}
-		if claimed[0].ID != issue.ID {
-			t.Fatalf("claimed ID = %s, want %s", claimed[0].ID, issue.ID)
-		}
-		if claimed[0].Status != types.StatusInProgress {
-			t.Fatalf("claimed status = %s, want %s", claimed[0].Status, types.StatusInProgress)
-		}
-		if claimed[0].Assignee == "" {
-			t.Fatal("expected claimed issue to have assignee")
-		}
-	})
-
 	// ===== With Blockers =====
 
 	t.Run("ready_excludes_blocked", func(t *testing.T) {
@@ -172,13 +98,13 @@ func TestEmbeddedReady(t *testing.T) {
 		cmd = exec.Command(bd, "ready")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd ready failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd ready failed: %v\n%s", err, out)
 		}
 		// The blocked issue should not appear in ready output
-		if strings.Contains(stdout.String(), "Blocked by blocker") {
-			t.Errorf("blocked issue should not appear in ready output: %s", stdout.String())
+		if strings.Contains(string(out), "Blocked by blocker") {
+			t.Errorf("blocked issue should not appear in ready output: %s", out)
 		}
 	})
 
@@ -191,15 +117,15 @@ func TestEmbeddedReady(t *testing.T) {
 		cmd := exec.Command(bd, "ready", "--exclude-label", "triage:pending")
 		cmd.Dir = dir
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd ready --exclude-label failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			t.Fatalf("bd ready --exclude-label failed: %v\n%s", err, out)
 		}
-		if strings.Contains(stdout.String(), "Triage pending item") {
-			t.Errorf("triage:pending issue should not appear with --exclude-label: %s", stdout.String())
+		if strings.Contains(string(out), "Triage pending item") {
+			t.Errorf("triage:pending issue should not appear with --exclude-label: %s", out)
 		}
-		if !strings.Contains(stdout.String(), "Normal ready item") {
-			t.Errorf("normal issue should still appear with --exclude-label: %s", stdout.String())
+		if !strings.Contains(string(out), "Normal ready item") {
+			t.Errorf("normal issue should still appear with --exclude-label: %s", out)
 		}
 	})
 
@@ -211,12 +137,12 @@ func TestEmbeddedReady(t *testing.T) {
 		cmd := exec.Command(bd, "-C", dir, "ready")
 		cmd.Dir = tmpDir // Run from a directory with no .beads/
 		cmd.Env = bdEnv(dir)
-		stdout, stderr, err := runCommandBuffers(t, cmd)
+		out, err := cmd.CombinedOutput()
 		if err != nil {
-			t.Fatalf("bd -C %s ready failed: %v\nstdout:\n%s\nstderr:\n%s", dir, err, stdout.String(), stderr.String())
+			t.Fatalf("bd -C %s ready failed: %v\n%s", dir, err, out)
 		}
-		if !strings.Contains(stdout.String(), "Ready test issue") {
-			t.Errorf("expected issue in ready -C output: %s", stdout.String())
+		if !strings.Contains(string(out), "Ready test issue") {
+			t.Errorf("expected issue in ready -C output: %s", out)
 		}
 	})
 
@@ -298,75 +224,5 @@ func TestEmbeddedReadyConcurrent(t *testing.T) {
 		if r.err != nil && !strings.Contains(r.err.Error(), "one writer at a time") {
 			t.Errorf("worker %d failed: %v", r.worker, r.err)
 		}
-	}
-}
-
-func TestEmbeddedReadyClaimConcurrent(t *testing.T) {
-	if os.Getenv("BEADS_TEST_EMBEDDED_DOLT") != "1" {
-		t.Skip("set BEADS_TEST_EMBEDDED_DOLT=1 to run embedded dolt integration tests")
-	}
-	t.Parallel()
-
-	bd := buildEmbeddedBD(t)
-	dir, _, _ := bdInit(t, bd, "--prefix", "rc")
-
-	issue := bdCreate(t, bd, dir, "Ready claim concurrent issue", "--type", "task")
-
-	const numWorkers = 8
-	type workerResult struct {
-		worker  int
-		claimed []types.IssueWithCounts
-		err     error
-		out     string
-	}
-	results := make([]workerResult, numWorkers)
-	var wg sync.WaitGroup
-	wg.Add(numWorkers)
-
-	for w := 0; w < numWorkers; w++ {
-		go func(worker int) {
-			defer wg.Done()
-			r := workerResult{worker: worker}
-			out, err := bdRunWithFlockRetry(t, bd, dir, "ready", "--claim", "--json")
-			r.out = string(out)
-			if err != nil {
-				r.err = fmt.Errorf("ready --claim (worker %d): %v\n%s", worker, err, out)
-				results[worker] = r
-				return
-			}
-			if err := json.Unmarshal(bytes.TrimSpace(out), &r.claimed); err != nil {
-				r.err = fmt.Errorf("parse ready --claim JSON (worker %d): %v\n%s", worker, err, out)
-			}
-			results[worker] = r
-		}(w)
-	}
-	wg.Wait()
-
-	claimCount := 0
-	for _, r := range results {
-		if r.err != nil {
-			t.Errorf("worker %d failed: %v", r.worker, r.err)
-			continue
-		}
-		if len(r.claimed) > 1 {
-			t.Errorf("worker %d claimed %d issues: %s", r.worker, len(r.claimed), r.out)
-			continue
-		}
-		if len(r.claimed) == 1 {
-			claimCount++
-			if r.claimed[0].ID != issue.ID {
-				t.Errorf("worker %d claimed %s, want %s", r.worker, r.claimed[0].ID, issue.ID)
-			}
-		}
-	}
-	if claimCount != 1 {
-		t.Fatalf("expected exactly one successful claim, got %d", claimCount)
-	}
-	got := bdShow(t, bd, dir, issue.ID)
-	if got.Status != types.StatusInProgress {
-		t.Fatalf("final status = %s, want %s", got.Status, types.StatusInProgress)
-	}
-	if got.Assignee == "" {
-		t.Fatal("expected final assignee to be set")
 	}
 }

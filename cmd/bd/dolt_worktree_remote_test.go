@@ -7,11 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/steveyegge/beads/internal/testutil"
 )
 
 func TestDoltRemoteAddPersistsSyncRemoteToSharedWorktreeConfig(t *testing.T) {
@@ -23,14 +20,7 @@ func TestDoltRemoteAddPersistsSyncRemoteToSharedWorktreeConfig(t *testing.T) {
 	bd := buildBDForInitTests(t)
 	bareDir, worktreeDir := setupBareParentInitWorktree(t)
 	bareBeadsDir := filepath.Join(bareDir, ".beads")
-	port, err := testutil.FindFreePort()
-	if err != nil {
-		t.Fatalf("find free port: %v", err)
-	}
-	sharedEnv := append(os.Environ(),
-		"BEADS_DOLT_SHARED_SERVER=1",
-		"BEADS_DOLT_SERVER_PORT="+strconv.Itoa(port),
-	)
+	sharedEnv := append(os.Environ(), "BEADS_DOLT_SHARED_SERVER=1")
 
 	initCmd := exec.Command(bd, "init", "--prefix", "remote-sync", "--skip-hooks", "--quiet")
 	initCmd.Dir = worktreeDir

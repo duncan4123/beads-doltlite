@@ -1,0 +1,1019 @@
+//go:build cgo
+
+package doltlite
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/steveyegge/beads/internal/config"
+	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/issueops"
+	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/internal/storage/versioncontrolops"
+	"github.com/steveyegge/beads/internal/types"
+)
+
+// Compile-time interface checks.
+var _ storage.DoltStorage = (*DoltliteStore)(nil)
+var _ storage.StoreLocator = (*DoltliteStore)(nil)
+var _ storage.GarbageCollector = (*DoltliteStore)(nil)
+var _ storage.Flattener = (*DoltliteStore)(nil)
+var _ storage.Compactor = (*DoltliteStore)(nil)
+
+// DoltliteStore implements storage.DoltStorage backed by the doltlite engine.
+// Each method call opens a short-lived connection, executes within an explicit
+// SQL transaction, and closes the connection immediately. This minimizes the
+// time the embedded engine's write lock is held, reducing contention when
+// multiple processes access the same database concurrently.
+//
+// Schema bootstrap is protected by a short exclusive flock. Normal operations
+// rely on doltlite's file-level locking and conflict detection so multiple bd
+// processes can read concurrently and serialize writes.
+type DoltliteStore struct {
+	dataDir       string
+	beadsDir      string
+	database      string
+	branch        string
+	credentialKey []byte
+	dbMu          sync.Mutex
+	db            *sql.DB
+	dbCleanup     func() error
+	closed        atomic.Bool
+}
+
+// errClosed is returned when a method is called after Close.
+var errClosed = errors.New("doltlite: store is closed")
+
+// Option configures optional behavior for New.
+type Option func(*options)
+
+type options struct {
+	lock Unlocker // pre-acquired lock; nil means New acquires its own
+}
+
+// WithLock passes a pre-acquired exclusive lock to New for schema bootstrap.
+// The caller retains ownership. Normal store operations do not hold this lock.
+func WithLock(lock Unlocker) Option {
+	return func(o *options) { o.lock = lock }
+}
+
+// New creates an DoltliteStore using the doltlite engine.
+// beadsDir is the .beads/ root; the data directory is derived as <beadsDir>/doltlite/.
+// The database is created automatically if it doesn't exist (initSchema handles this).
+//
+// Schema bootstrap is guarded by a short exclusive flock. After bootstrap, the
+// lock is released and normal operations use doltlite's own file-level locks.
+func New(ctx context.Context, beadsDir, database, branch string, opts ...Option) (*DoltliteStore, error) {
+	if database == "" {
+		return nil, fmt.Errorf("doltlite: database name must not be empty (caller should default to %q)", "beads")
+	}
+
+	var o options
+	for _, fn := range opts {
+		fn(&o)
+	}
+
+	// Resolve to absolute path so the SQLite database path is stable across
+	// callers with different working directories.
+	absBeadsDir, err := filepath.Abs(beadsDir)
+	if err != nil {
+		return nil, fmt.Errorf("doltlite: resolving beads dir: %w", err)
+	}
+	dataDir := filepath.Join(absBeadsDir, "doltlite")
+	if err := os.MkdirAll(dataDir, config.BeadsDirPerm); err != nil {
+		return nil, fmt.Errorf("doltlite: creating data directory: %w", err)
+	}
+
+	lock := o.lock
+	ownsLock := lock == nil
+	if ownsLock {
+		var err error
+		lock, err = WaitLock(ctx, dataDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if lock != nil && ownsLock {
+		defer lock.Unlock()
+	}
+
+	s := &DoltliteStore{
+		dataDir:  dataDir,
+		beadsDir: absBeadsDir,
+		database: database,
+		branch:   branch,
+	}
+
+	if err := s.initSchema(ctx); err != nil {
+		return nil, fmt.Errorf("doltlite: init schema: %w", err)
+	}
+	if err := s.openPersistentDB(ctx); err != nil {
+		return nil, fmt.Errorf("doltlite: open database: %w", err)
+	}
+
+	// Backfill custom_types / custom_statuses from config values,
+	// fixing databases where schema migration created empty tables.
+	if err := s.backfillCustomTables(ctx); err != nil {
+		return nil, fmt.Errorf("doltlite: backfill custom tables: %w", err)
+	}
+
+	if s.branch == "" {
+		branch, err := s.CurrentBranch(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("doltlite: get current branch: %w", err)
+		}
+		s.branch = branch
+	}
+	// Ensure dolt_ignore'd wisp tables exist in the working set.
+	// After a clone or branch switch, these tables are absent because
+	// dolt_ignore prevents them from being committed. Server mode handles
+	// this in newServerMode(); embedded mode must do it here. (GH#3270)
+	if err := s.ensureIgnoredTables(ctx); err != nil {
+		return nil, fmt.Errorf("doltlite: ensure ignored tables: %w", err)
+	}
+
+	return s, nil
+}
+
+func (s *DoltliteStore) openPersistentDB(ctx context.Context) error {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	if s.db != nil {
+		return nil
+	}
+	db, cleanup, err := OpenSQL(ctx, s.dataDir, s.database, s.branch)
+	if err != nil {
+		return err
+	}
+	s.db = db
+	s.dbCleanup = cleanup
+	return nil
+}
+
+func (s *DoltliteStore) activeDB(ctx context.Context) (*sql.DB, func() error, error) {
+	s.dbMu.Lock()
+	db := s.db
+	s.dbMu.Unlock()
+	if db != nil {
+		return db, func() error { return nil }, nil
+	}
+	return OpenSQL(ctx, s.dataDir, s.database, s.branch)
+}
+
+// withRootConn opens a short-lived database connection without selecting any
+// database or branch, begins an explicit SQL transaction, and passes it to fn.
+// This is used during initialization when the database may not yet exist.
+func (s *DoltliteStore) withRootConn(ctx context.Context, commit bool, fn func(tx *sql.Tx) error) (err error) {
+	if commit {
+		return s.withExclusiveLock(ctx, func() error {
+			return s.withRetry(ctx, func() error {
+				return s.withRootConnOnce(ctx, commit, fn)
+			})
+		})
+	}
+	return s.withRootConnOnce(ctx, commit, fn)
+}
+
+func (s *DoltliteStore) withRootConnOnce(ctx context.Context, commit bool, fn func(tx *sql.Tx) error) (err error) {
+	if s.closed.Load() {
+		err = errClosed
+		return
+	}
+
+	var db *sql.DB
+	var cleanup func() error
+	db, cleanup, err = OpenSQL(ctx, s.dataDir, "", "")
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		err = errors.Join(err, cleanup())
+	}()
+
+	var tx *sql.Tx
+	tx, err = db.BeginTx(ctx, nil)
+	if err != nil {
+		err = fmt.Errorf("doltlite: begin tx: %w", err)
+		return
+	}
+
+	err = fn(tx)
+	if err != nil {
+		err = errors.Join(err, tx.Rollback())
+		return
+	}
+
+	if !commit {
+		return tx.Rollback()
+	}
+
+	err = tx.Commit()
+	return
+}
+
+// withConn opens a short-lived database connection configured for the store's
+// database and branch, begins an explicit SQL transaction, and passes it to
+// fn. If commit is true and fn returns nil, the transaction is committed;
+// otherwise it is rolled back. The connection is closed before withConn
+// returns regardless of outcome.
+//
+// The database must already exist (created during initSchema).
+func (s *DoltliteStore) withConn(ctx context.Context, commit bool, fn func(tx *sql.Tx) error) (err error) {
+	if commit {
+		return s.withExclusiveLock(ctx, func() error {
+			return s.withRetry(ctx, func() error {
+				return s.withConnOnce(ctx, commit, fn)
+			})
+		})
+	}
+	return s.withConnOnce(ctx, commit, fn)
+}
+
+func (s *DoltliteStore) withConnOnce(ctx context.Context, commit bool, fn func(tx *sql.Tx) error) (err error) {
+	if s.closed.Load() {
+		err = errClosed
+		return
+	}
+
+	var db *sql.DB
+	var cleanup func() error
+	db, cleanup, err = s.activeDB(ctx)
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		err = errors.Join(err, cleanup())
+	}()
+
+	var tx *sql.Tx
+	tx, err = db.BeginTx(ctx, nil)
+	if err != nil {
+		err = fmt.Errorf("doltlite: begin tx: %w", err)
+		return
+	}
+
+	err = fn(tx)
+	if err != nil {
+		err = errors.Join(err, tx.Rollback())
+		return
+	}
+
+	if !commit {
+		return tx.Rollback()
+	}
+
+	err = tx.Commit()
+	return
+}
+
+func (s *DoltliteStore) withRetry(ctx context.Context, fn func() error) error {
+	const maxAttempts = 5
+	var err error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		if !isRetryableConcurrencyError(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(time.Duration(50*(1<<attempt)) * time.Millisecond):
+		}
+	}
+	return err
+}
+
+func (s *DoltliteStore) withExclusiveLock(ctx context.Context, fn func() error) error {
+	lock, err := WaitLock(ctx, s.dataDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Unlock()
+	return fn()
+}
+
+func isRetryableConcurrencyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "another connection committed") ||
+		strings.Contains(msg, "please retry your transaction")
+}
+
+// initSchema creates the database (if needed) and runs all pending migrations,
+// committing them to Dolt history. Uses withRootConn so the database can be
+// created before USE; this avoids running CREATE DATABASE inside withConn,
+// which is not safe for concurrent use in the doltlite engine.
+//
+// After the schema-migration transaction commits, a fresh *sql.DB is opened
+// and used to drive the idempotent compat-migration runner. Mirrors the
+// server-mode open path in dolt/store.go:initSchemaOnDB and repairs
+// pre-existing embedded databases that predate the embedded migration
+// system's full coverage (GH#3412).
+func (s *DoltliteStore) initSchema(ctx context.Context) error {
+	if s.database != "" && !validIdentifier.MatchString(s.database) {
+		return fmt.Errorf("doltlite: invalid database name: %q", s.database)
+	}
+
+	db, cleanup, err := OpenSQL(ctx, s.dataDir, s.database, s.branch)
+	if err != nil {
+		return fmt.Errorf("doltlite: open for schema init: %w", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	if err := schema.CreateIgnoredTablesSQLite(ctx, db); err != nil {
+		return fmt.Errorf("ensure ignored tables before migration: %w", err)
+	}
+
+	applied, err := schema.MigrateUpSQLite(ctx, db)
+	if err != nil {
+		return err
+	}
+	if applied > 0 {
+		if err := commitAllNative(ctx, db, "schema: apply migrations"); err != nil {
+			return fmt.Errorf("commit migration: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// ensureIgnoredTables creates dolt_ignore'd wisp tables if they don't exist.
+// Uses withConn (not withRootConn) because the database is already created.
+func (s *DoltliteStore) ensureIgnoredTables(ctx context.Context) error {
+	return s.withConn(ctx, false, func(tx *sql.Tx) error {
+		return schema.CreateIgnoredTablesSQLite(ctx, tx)
+	})
+}
+
+// GetIssue is implemented in get_issue.go.
+
+func (s *DoltliteStore) GetIssueByExternalRef(ctx context.Context, externalRef string) (*types.Issue, error) {
+	var id string
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		id, err = issueops.GetIssueByExternalRefInTx(ctx, tx, externalRef)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetIssue(ctx, id)
+}
+
+// GetIssuesByIDs is implemented in dependencies.go.
+
+// UpdateIssue is implemented in issues.go.
+
+// CloseIssue is implemented in issues.go.
+
+func (s *DoltliteStore) DeleteIssue(ctx context.Context, id string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.DeleteIssueInTx(ctx, tx, id)
+	})
+}
+
+// AddDependency is implemented in dependencies.go.
+
+// RemoveDependency is implemented in dependencies.go.
+
+func (s *DoltliteStore) GetDependencies(ctx context.Context, issueID string) ([]*types.Issue, error) {
+	var result []*types.Issue
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetDependenciesInTx(ctx, tx, issueID)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetDependents(ctx context.Context, issueID string) ([]*types.Issue, error) {
+	var result []*types.Issue
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetDependentsInTx(ctx, tx, issueID)
+		return err
+	})
+	return result, err
+}
+
+// GetDependenciesWithMetadata is implemented in dependencies.go.
+
+// GetDependentsWithMetadata is implemented in dependencies.go.
+
+func (s *DoltliteStore) GetDependencyTree(ctx context.Context, issueID string, maxDepth int, showAllPaths bool, reverse bool) ([]*types.TreeNode, error) {
+	var result []*types.TreeNode
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetDependencyTreeInTx(ctx, tx, issueID, maxDepth, showAllPaths, reverse)
+		return err
+	})
+	return result, err
+}
+
+// AddLabel is implemented in labels.go.
+
+// RemoveLabel is implemented in labels.go.
+
+// GetLabels is implemented in labels.go.
+
+func (s *DoltliteStore) GetIssuesByLabel(ctx context.Context, label string) ([]*types.Issue, error) {
+	var ids []string
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		ids, err = issueops.GetIssuesByLabelInTx(ctx, tx, label)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetIssuesByIDs(ctx, ids)
+}
+
+// GetReadyWork is implemented in queries.go.
+
+func (s *DoltliteStore) GetBlockedIssues(ctx context.Context, filter types.WorkFilter) ([]*types.BlockedIssue, error) {
+	var result []*types.BlockedIssue
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetBlockedIssuesInTx(ctx, tx, filter)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetEpicsEligibleForClosure(ctx context.Context) ([]*types.EpicStatus, error) {
+	var result []*types.EpicStatus
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetEpicsEligibleForClosureInTx(ctx, tx)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) AddIssueComment(ctx context.Context, issueID, author, text string) (*types.Comment, error) {
+	var result *types.Comment
+	err := s.withConn(ctx, true, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.AddIssueCommentInTx(ctx, tx, issueID, author, text)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetIssueComments(ctx context.Context, issueID string) ([]*types.Comment, error) {
+	var result []*types.Comment
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetIssueCommentsInTx(ctx, tx, issueID)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetEvents(ctx context.Context, issueID string, limit int) ([]*types.Event, error) {
+	var result []*types.Event
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetEventsInTx(ctx, tx, issueID, limit)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetAllEventsSince(ctx context.Context, since time.Time) ([]*types.Event, error) {
+	var result []*types.Event
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetAllEventsSinceInTx(ctx, tx, since)
+		return err
+	})
+	return result, err
+}
+
+// RunInTransaction is implemented in transaction.go.
+
+// Close marks the store as closed and cleans up orphaned git-remote-cache
+// garbage. Subsequent method calls will return errClosed.
+func (s *DoltliteStore) Close() error {
+	if s.closed.CompareAndSwap(false, true) {
+		s.dbMu.Lock()
+		cleanup := s.dbCleanup
+		s.db = nil
+		s.dbCleanup = nil
+		s.dbMu.Unlock()
+		if cleanup != nil {
+			_ = cleanup()
+		}
+		s.cleanGitRemoteCacheGarbage()
+	}
+	return nil
+}
+
+// DoltGC runs Dolt garbage collection to reclaim disk space.
+func (s *DoltliteStore) DoltGC(ctx context.Context) error {
+	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if _, err := db.ExecContext(ctx, "SELECT dolt_gc()"); err != nil {
+			return fmt.Errorf("doltlite gc: %w", err)
+		}
+		return nil
+	})
+}
+
+// Flatten squashes all doltlite commit history into a single commit.
+func (s *DoltliteStore) Flatten(ctx context.Context) error {
+	return s.withDBWrite(ctx, func(db versioncontrolops.DBConn) error {
+		var initialHash string
+		if err := db.QueryRowContext(ctx,
+			"SELECT commit_hash FROM dolt_log ORDER BY date ASC LIMIT 1",
+		).Scan(&initialHash); err != nil {
+			return fmt.Errorf("find initial commit: %w", err)
+		}
+
+		var commitCount int
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM dolt_log",
+		).Scan(&commitCount); err != nil {
+			return fmt.Errorf("count commits: %w", err)
+		}
+		if commitCount <= 1 {
+			return nil
+		}
+
+		steps := []struct {
+			name  string
+			query string
+			args  []any
+		}{
+			{"create temp branch", "SELECT dolt_branch('flatten-tmp')", nil},
+			{"checkout temp branch", "SELECT dolt_checkout('flatten-tmp')", nil},
+			{"soft reset to initial", "SELECT dolt_reset('--soft', ?)", []any{initialHash}},
+			{"commit flattened snapshot", "SELECT dolt_commit('-A', '-m', 'flatten: squash all history into single commit')", nil},
+			{"checkout main", "SELECT dolt_checkout('main')", nil},
+			{"reset main to flattened", "SELECT dolt_reset('--hard', 'flatten-tmp')", nil},
+			{"delete temp branch", "SELECT dolt_branch('-D', 'flatten-tmp')", nil},
+		}
+		for _, step := range steps {
+			if _, err := db.ExecContext(ctx, step.query, step.args...); err != nil {
+				return fmt.Errorf("flatten step %q: %w", step.name, err)
+			}
+		}
+		return nil
+	})
+}
+
+// Compact squashes old doltlite commits while preserving recent ones.
+func (s *DoltliteStore) Compact(ctx context.Context, initialHash, boundaryHash string, oldCommits int, recentHashes []string) error {
+	return s.withDBWrite(ctx, func(db versioncontrolops.DBConn) (retErr error) {
+		branchCreated := false
+		defer func() {
+			if retErr != nil && branchCreated {
+				_, _ = db.ExecContext(ctx, "SELECT dolt_checkout('main')")
+				_, _ = db.ExecContext(ctx, "SELECT dolt_branch('-D', 'compact-tmp')")
+			}
+		}()
+
+		execSQL := func(name, query string, args ...any) error {
+			if _, err := db.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("compact step %q: %w", name, err)
+			}
+			return nil
+		}
+
+		if err := execSQL("create temp branch", "SELECT dolt_branch('compact-tmp', ?)", boundaryHash); err != nil {
+			return err
+		}
+		branchCreated = true
+
+		if err := execSQL("checkout temp", "SELECT dolt_checkout('compact-tmp')"); err != nil {
+			return err
+		}
+		if err := execSQL("soft reset to initial", "SELECT dolt_reset('--soft', ?)", initialHash); err != nil {
+			return err
+		}
+		msg := fmt.Sprintf("compact: squash %d commits into base snapshot", oldCommits)
+		if err := execSQL("commit squashed base", "SELECT dolt_commit('-A', '-m', ?)", msg); err != nil {
+			return err
+		}
+
+		for _, hash := range recentHashes {
+			label := hash
+			if len(label) > 8 {
+				label = label[:8]
+			}
+			if err := execSQL("cherry-pick "+label, "SELECT dolt_cherry_pick(?)", hash); err != nil {
+				return err
+			}
+		}
+
+		if err := execSQL("checkout main", "SELECT dolt_checkout('main')"); err != nil {
+			return err
+		}
+		if err := execSQL("reset main to compacted", "SELECT dolt_reset('--hard', 'compact-tmp')"); err != nil {
+			return err
+		}
+		if err := execSQL("delete temp branch", "SELECT dolt_branch('-D', 'compact-tmp')"); err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+// Path returns the doltlite data directory (.beads/doltlite/).
+func (s *DoltliteStore) Path() string {
+	return s.dataDir
+}
+
+// CLIDir returns the directory for dolt CLI operations (push/pull/remote).
+// This is the actual database directory within the data dir.
+func (s *DoltliteStore) CLIDir() string {
+	if s.dataDir == "" {
+		return ""
+	}
+	dsn, err := buildDSN(s.dataDir, s.database)
+	if err != nil {
+		return ""
+	}
+	return strings.SplitN(dsn, "?", 2)[0]
+}
+
+// ---------------------------------------------------------------------------
+// storage.VersionControl
+// ---------------------------------------------------------------------------
+
+// Branch, Checkout, CurrentBranch, DeleteBranch, ListBranches are
+// implemented in version_control.go.
+
+func (s *DoltliteStore) CommitPending(ctx context.Context, actor string) (bool, error) {
+	var hasPending bool
+	var msg string
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		hasPending, err = issueops.HasPendingChanges(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if hasPending {
+			msg = buildDoltliteBatchCommitMessage(ctx, tx, actor)
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if !hasPending {
+		return false, nil
+	}
+
+	if err := s.Commit(ctx, msg); err != nil {
+		if issueops.IsNothingToCommitError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// CommitExists is implemented in version_control.go.
+
+func (s *DoltliteStore) GetCurrentCommit(ctx context.Context) (string, error) {
+	var hash string
+	err := s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		return db.QueryRowContext(ctx, "SELECT dolt_hashof('HEAD')").Scan(&hash)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return hash, err
+}
+
+// Status, Log, Merge, GetConflicts, ResolveConflicts are implemented in
+// version_control.go.
+
+// ---------------------------------------------------------------------------
+// storage.HistoryViewer
+// ---------------------------------------------------------------------------
+
+func (s *DoltliteStore) History(ctx context.Context, issueID string) ([]*storage.HistoryEntry, error) {
+	var result []*storage.HistoryEntry
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = doltliteHistoryInTx(ctx, tx, issueID)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) AsOf(ctx context.Context, issueID string, ref string) (*types.Issue, error) {
+	var result *types.Issue
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = doltliteAsOfInTx(ctx, tx, issueID, ref)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) Diff(ctx context.Context, fromRef, toRef string) ([]*storage.DiffEntry, error) {
+	var result []*storage.DiffEntry
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = doltliteDiffInTx(ctx, tx, fromRef, toRef)
+		return err
+	})
+	return result, err
+}
+
+// ---------------------------------------------------------------------------
+// storage.RemoteStore
+// ---------------------------------------------------------------------------
+
+// RemoveRemote, ListRemotes, Push, Pull, ForcePush, Fetch, PushTo, PullFrom
+// are implemented in version_control.go.
+
+// ---------------------------------------------------------------------------
+// storage.SyncStore
+// ---------------------------------------------------------------------------
+
+// Sync and SyncStatus are implemented in federation.go.
+
+// ---------------------------------------------------------------------------
+// storage.FederationStore
+// ---------------------------------------------------------------------------
+
+// AddFederationPeer, GetFederationPeer, ListFederationPeers, RemoveFederationPeer
+// are implemented in federation.go via issueops.
+
+// ---------------------------------------------------------------------------
+// storage.BulkIssueStore
+// ---------------------------------------------------------------------------
+
+// CreateIssuesWithFullOptions is implemented in create_issue.go.
+
+func (s *DoltliteStore) DeleteIssues(ctx context.Context, ids []string, cascade bool, force bool, dryRun bool) (*types.DeleteIssuesResult, error) {
+	var result *types.DeleteIssuesResult
+	err := s.withConn(ctx, !dryRun, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.DeleteIssuesInTx(ctx, tx, ids, cascade, force, dryRun)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) DeleteIssuesBySourceRepo(ctx context.Context, sourceRepo string) (int, error) {
+	var count int
+	err := s.withConn(ctx, true, func(tx *sql.Tx) error {
+		var err error
+		count, err = issueops.DeleteIssuesBySourceRepoInTx(ctx, tx, sourceRepo)
+		return err
+	})
+	return count, err
+}
+
+func (s *DoltliteStore) UpdateIssueID(ctx context.Context, oldID, newID string, issue *types.Issue, actor string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.UpdateIssueIDInTx(ctx, tx, oldID, newID, issue, actor)
+	})
+}
+
+// ClaimIssue is implemented in issues.go.
+
+func (s *DoltliteStore) PromoteFromEphemeral(ctx context.Context, id string, actor string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.PromoteFromEphemeralInTx(ctx, tx, id, actor)
+	})
+}
+
+// GetNextChildID is implemented in child_id.go.
+
+func (s *DoltliteStore) RenameCounterPrefix(ctx context.Context, oldPrefix, newPrefix string) error {
+	return nil // Hash-based IDs don't use counters.
+}
+
+// ---------------------------------------------------------------------------
+// storage.DependencyQueryStore
+// ---------------------------------------------------------------------------
+
+func (s *DoltliteStore) GetDependencyRecords(ctx context.Context, issueID string) ([]*types.Dependency, error) {
+	var result []*types.Dependency
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		m, err := issueops.GetDependencyRecordsForIssuesInTx(ctx, tx, []string{issueID})
+		if err != nil {
+			return err
+		}
+		result = m[issueID]
+		return nil
+	})
+	return result, err
+}
+
+// IsBlocked is implemented in issues.go.
+
+// GetNewlyUnblockedByClose is implemented in issues.go.
+
+// DetectCycles is implemented in dependencies.go.
+
+func (s *DoltliteStore) FindWispDependentsRecursive(ctx context.Context, ids []string) (map[string]bool, error) {
+	var result map[string]bool
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.FindWispDependentsRecursiveInTx(ctx, tx, ids)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) RenameDependencyPrefix(ctx context.Context, oldPrefix, newPrefix string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.RenameDependencyPrefixInTx(ctx, tx, oldPrefix, newPrefix)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// storage.AnnotationQueryStore
+// ---------------------------------------------------------------------------
+
+func (s *DoltliteStore) AddComment(ctx context.Context, issueID, actor, comment string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.AddCommentEventInTx(ctx, tx, issueID, actor, comment)
+	})
+}
+
+func (s *DoltliteStore) ImportIssueComment(ctx context.Context, issueID, author, text string, createdAt time.Time) (*types.Comment, error) {
+	var result *types.Comment
+	err := s.withConn(ctx, true, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.ImportIssueCommentInTx(ctx, tx, issueID, author, text, createdAt)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetCommentsForIssues(ctx context.Context, issueIDs []string) (map[string][]*types.Comment, error) {
+	var result map[string][]*types.Comment
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetCommentsForIssuesInTx(ctx, tx, issueIDs)
+		return err
+	})
+	return result, err
+}
+
+// ---------------------------------------------------------------------------
+// storage.ConfigMetadataStore
+// ---------------------------------------------------------------------------
+
+func (s *DoltliteStore) DeleteConfig(ctx context.Context, key string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.DeleteConfigInTx(ctx, tx, key)
+	})
+}
+
+func (s *DoltliteStore) GetCustomStatuses(ctx context.Context) ([]string, error) {
+	detailed, err := s.GetCustomStatusesDetailed(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return types.CustomStatusNames(detailed), nil
+}
+
+func (s *DoltliteStore) GetCustomStatusesDetailed(ctx context.Context) ([]types.CustomStatus, error) {
+	var result []types.CustomStatus
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var txErr error
+		result, txErr = issueops.ResolveCustomStatusesDetailedInTx(ctx, tx)
+		return txErr
+	})
+	if err != nil {
+		// DB unavailable — fall back to config.yaml.
+		if yamlStatuses := config.GetCustomStatusesFromYAML(); len(yamlStatuses) > 0 {
+			return issueops.ParseStatusFallback(yamlStatuses), nil
+		}
+		return nil, nil
+	}
+	return result, nil
+}
+
+func (s *DoltliteStore) GetCustomTypes(ctx context.Context) ([]string, error) {
+	var result []string
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var txErr error
+		result, txErr = issueops.ResolveCustomTypesInTx(ctx, tx)
+		return txErr
+	})
+	if err != nil {
+		// DB unavailable — fall back to config.yaml.
+		if yamlTypes := config.GetCustomTypesFromYAML(); len(yamlTypes) > 0 {
+			return yamlTypes, nil
+		}
+		return nil, err
+	}
+	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// storage.CompactionStore
+// ---------------------------------------------------------------------------
+
+func (s *DoltliteStore) CheckEligibility(ctx context.Context, issueID string, tier int) (bool, string, error) {
+	var eligible bool
+	var reason string
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		eligible, reason, err = issueops.CheckEligibilityInTx(ctx, tx, issueID, tier)
+		return err
+	})
+	return eligible, reason, err
+}
+
+func (s *DoltliteStore) ApplyCompaction(ctx context.Context, issueID string, tier int, originalSize int, _ int, commitHash string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.ApplyCompactionInTx(ctx, tx, issueID, tier, originalSize, commitHash)
+	})
+}
+
+func (s *DoltliteStore) GetTier1Candidates(ctx context.Context) ([]*types.CompactionCandidate, error) {
+	var result []*types.CompactionCandidate
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetTier1CandidatesInTx(ctx, tx)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetTier2Candidates(ctx context.Context) ([]*types.CompactionCandidate, error) {
+	var result []*types.CompactionCandidate
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetTier2CandidatesInTx(ctx, tx)
+		return err
+	})
+	return result, err
+}
+
+// ---------------------------------------------------------------------------
+// storage.AdvancedQueryStore
+// ---------------------------------------------------------------------------
+
+func (s *DoltliteStore) GetRepoMtime(ctx context.Context, repoPath string) (int64, error) {
+	var result int64
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetRepoMtimeInTx(ctx, tx, repoPath)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) SetRepoMtime(ctx context.Context, repoPath, jsonlPath string, mtimeNs int64) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.SetRepoMtimeInTx(ctx, tx, repoPath, jsonlPath, mtimeNs)
+	})
+}
+
+func (s *DoltliteStore) ClearRepoMtime(ctx context.Context, repoPath string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.ClearRepoMtimeInTx(ctx, tx, repoPath)
+	})
+}
+
+// GetMoleculeProgress is implemented in queries.go.
+
+func (s *DoltliteStore) GetMoleculeLastActivity(ctx context.Context, moleculeID string) (*types.MoleculeLastActivity, error) {
+	var result *types.MoleculeLastActivity
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetMoleculeLastActivityInTx(ctx, tx, moleculeID)
+		return err
+	})
+	return result, err
+}
+
+func (s *DoltliteStore) GetStaleIssues(ctx context.Context, filter types.StaleFilter) ([]*types.Issue, error) {
+	var result []*types.Issue
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		result, err = issueops.GetStaleIssuesInTx(ctx, tx, filter)
+		return err
+	})
+	return result, err
+}

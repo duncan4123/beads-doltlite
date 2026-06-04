@@ -36,21 +36,21 @@ func bdLintJSON(t *testing.T, bd, dir string, args ...string) map[string]interfa
 	cmd := exec.Command(bd, fullArgs...)
 	cmd.Dir = dir
 	cmd.Env = bdEnv(dir)
-	stdout, stderr, err := runCommandBuffers(t, cmd)
+	out, err := cmd.CombinedOutput()
 	// lint exits 1 on warnings even with --json, so ignore exit error
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); !ok {
-			t.Fatalf("bd lint --json %s failed: %v\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), err, stdout.String(), stderr.String())
+			t.Fatalf("bd lint --json %s failed: %v\n%s", strings.Join(args, " "), err, out)
 		}
 	}
-	s := strings.TrimSpace(stdout.String())
+	s := strings.TrimSpace(string(out))
 	start := strings.Index(s, "{")
 	if start < 0 {
-		t.Fatalf("no JSON object in lint output:\nstdout: %s\nstderr: %s", s, stderr.String())
+		t.Fatalf("no JSON object in lint output: %s", s)
 	}
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(s[start:]), &m); err != nil {
-		t.Fatalf("parse lint JSON: %v\nstdout: %s", err, s)
+		t.Fatalf("parse lint JSON: %v\n%s", err, s)
 	}
 	return m
 }

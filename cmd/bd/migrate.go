@@ -8,8 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/configfile"
-	"github.com/steveyegge/beads/internal/storage"
-	"github.com/steveyegge/beads/internal/storage/schema"
+	"github.com/steveyegge/beads/internal/storage/dolt/migrations"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
@@ -26,7 +25,6 @@ Without subcommand, checks and updates database metadata to current version.
 Subcommands:
   hooks       Plan git hook migration to marker-managed format
   issues      Move issues between repositories
-  schema      Apply pending schema migrations (idempotent)
   sync        Set up sync.branch workflow for multi-clone setups
 `,
 	Run: func(cmd *cobra.Command, _ []string) {
@@ -254,8 +252,11 @@ func handleDoltMetadataUpdate(cfg *configfile.Config, dryRun bool) {
 		fmt.Printf("\nDolt database: %s (version %s)\n", cfg.Database, Version)
 	}
 
-	if versionUpdated || repoIDSet || cloneIDSet {
-		commandDidWrite.Store(true)
+	// Embedded mode: flush Dolt commit after metadata writes.
+	if isEmbeddedMode() && (versionUpdated || repoIDSet || cloneIDSet) && store != nil {
+		if _, err := store.CommitPending(ctx, "migrate"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to commit: %v\n", err)
+		}
 	}
 }
 
@@ -387,7 +388,12 @@ func handleUpdateRepoID(dryRun bool, autoYes bool) {
 		fmt.Printf("  New: %s\n", truncateID(newRepoID, 8))
 	}
 
-	commandDidWrite.Store(true)
+	// Embedded mode: flush Dolt commit.
+	if isEmbeddedMode() && store != nil {
+		if _, err := store.CommitPending(rootCtx, "migrate"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to commit: %v\n", err)
+		}
+	}
 }
 
 // handleInspect shows migration plan and database state for AI agent analysis
@@ -522,78 +528,6 @@ func handleInspect() {
 	}
 }
 
-func handleSchemaMigrate() {
-	beadsDir := beads.FindBeadsDir()
-	if beadsDir == "" {
-		if jsonOutput {
-			outputJSON(map[string]interface{}{
-				"error":   "no_beads_directory",
-				"message": activeWorkspaceNotFoundMessage() + " " + diagHint() + ".",
-			})
-			os.Exit(1)
-		}
-		FatalErrorWithHint(activeWorkspaceNotFoundError(), diagHint())
-	}
-
-	store := getStore()
-	if store == nil {
-		if jsonOutput {
-			outputJSON(map[string]interface{}{
-				"error":   "no_database",
-				"message": "No database found. Run 'bd init' to create a new database.",
-			})
-			os.Exit(1)
-		}
-		FatalErrorWithHint("no database", "Run 'bd init' to create a new database")
-	}
-
-	migrator, ok := storage.UnwrapStore(store).(storage.SchemaMigrator)
-	if !ok {
-		if jsonOutput {
-			outputJSON(map[string]interface{}{
-				"error":   "unsupported_backend",
-				"message": "current storage backend does not support schema migration",
-			})
-			os.Exit(1)
-		}
-		FatalError("current storage backend does not support schema migration")
-	}
-
-	applied, err := migrator.ApplySchemaMigrations(rootCtx)
-	if err != nil {
-		if jsonOutput {
-			outputJSON(map[string]interface{}{
-				"error":   "schema_migration_failed",
-				"message": err.Error(),
-			})
-			os.Exit(1)
-		}
-		FatalError("schema migration failed: %v", err)
-	}
-
-	latest := schema.LatestVersion()
-	status := "current"
-	if applied > 0 {
-		status = "applied"
-		commandDidWrite.Store(true)
-	}
-
-	if jsonOutput {
-		outputJSON(map[string]interface{}{
-			"status":         status,
-			"applied":        applied,
-			"latest_version": latest,
-		})
-		return
-	}
-
-	if applied == 0 {
-		fmt.Printf("%s\n", ui.RenderPass(fmt.Sprintf("✓ Schema already at v%d", latest)))
-		return
-	}
-	fmt.Printf("%s\n", ui.RenderPass(fmt.Sprintf("✓ Applied %d schema migration(s); schema now at v%d", applied, latest)))
-}
-
 // handleToSeparateBranch configures separate branch workflow for existing repos
 func handleToSeparateBranch(branch string, dryRun bool) {
 	// Validate branch name
@@ -696,16 +630,17 @@ func handleToSeparateBranch(branch string, dryRun bool) {
 		fmt.Println("  3. Future issue updates are stored in Dolt directly")
 	}
 
-	if !dryRun {
-		commandDidWrite.Store(true)
+	// Embedded mode: flush Dolt commit.
+	if isEmbeddedMode() && !dryRun && store != nil {
+		if _, commitErr := store.CommitPending(rootCtx, "migrate"); commitErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to commit: %v\n", commitErr)
+		}
 	}
 }
 
-// listMigrations returns registered Dolt schema migrations. The compat runner
-// was retired once all historical migrations had SQL equivalents; this is
-// kept as a stable hook for `bd migrate --inspect` output.
+// listMigrations returns registered Dolt schema migrations.
 func listMigrations() []string {
-	return nil
+	return migrations.ListCompatMigrations()
 }
 
 // migrateSyncCmd is the "bd migrate sync <branch>" subcommand that
@@ -732,25 +667,6 @@ Example:
 	},
 }
 
-var migrateSchemaCmd = &cobra.Command{
-	Use:   "schema",
-	Short: "Apply pending schema migrations (idempotent)",
-	Long: `Apply pending schema migrations idempotently.
-
-Schema migrations also run automatically on store open, so this subcommand
-is typically a no-op. It exists to make migration explicit and observable
-in CI, release gates, and recovery scenarios.
-
-Example:
-  bd migrate schema
-  bd migrate schema --json`,
-	Args: cobra.NoArgs,
-	Run: func(cmd *cobra.Command, _ []string) {
-		CheckReadonly("migrate schema")
-		handleSchemaMigrate()
-	},
-}
-
 func init() {
 	migrateCmd.Flags().Bool("yes", false, "Auto-confirm prompts")
 	migrateCmd.Flags().Bool("dry-run", false, "Show what would be done without making changes")
@@ -767,9 +683,6 @@ func init() {
 	migrateHooksCmd.Flags().Bool("yes", false, "Skip confirmation prompt for --apply")
 	migrateHooksCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	migrateCmd.AddCommand(migrateHooksCmd)
-
-	migrateSchemaCmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
-	migrateCmd.AddCommand(migrateSchemaCmd)
 
 	rootCmd.AddCommand(migrateCmd)
 }

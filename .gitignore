@@ -128,9 +128,6 @@ bd_test
 
 # Orchestrator (added by gt)
 .logs/
-.beads/*
-!.beads/formulas/
-!.beads/formulas/**
 .opencode/
 
 # Beads / Dolt files (added by bd init)
@@ -138,3 +135,7 @@ bd_test
 
 # Beads / Dolt files (added by bd init)
 .beads/proxieddb/
+
+# Gas City
+.beads/*
+!.beads/identity.toml

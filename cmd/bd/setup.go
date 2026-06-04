@@ -32,13 +32,10 @@ var setupCmd = &cobra.Command{
 	Long: `Setup integration files for AI editors and coding assistants.
 
 Recipes define where beads workflow instructions are written. Built-in recipes
-include cursor, claude, copilot, gemini, aider, factory, codex, mux, opencode, junie, windsurf, cody, and kilocode.
+include cursor, claude, gemini, aider, factory, codex, mux, opencode, junie, windsurf, cody, and kilocode.
 
 Examples:
   bd setup cursor          # Install Cursor IDE integration
-  bd setup codex           # Install Codex skill + AGENTS.md guidance + native hooks
-  bd setup codex --global  # Install global Codex skill + guidance + native hooks
-  bd setup copilot         # Install Copilot CLI plugin + repository instructions
   bd setup mux --project   # Install Mux workspace layer (.mux/AGENTS.md)
   bd setup mux --global    # Install Mux global layer (~/.mux/AGENTS.md)
   bd setup mux --project --global  # Install both Mux layers
@@ -239,56 +236,29 @@ func runRecipe(name string) {
 		FatalErrorWithHint(fmt.Sprintf("%v", err), "Use 'bd setup --list' to see available recipes.")
 	}
 
-	if recipe.Type != recipes.TypeFile && recipe.Type != recipes.TypeMultiFile {
+	if recipe.Type != recipes.TypeFile {
 		FatalError("recipe '%s' has type '%s' which requires special handling", name, recipe.Type)
-	}
-
-	paths := recipe.Paths
-	if recipe.Type == recipes.TypeFile {
-		paths = []string{recipe.Path}
 	}
 
 	// Handle --check
 	if setupCheck {
-		var missing []string
-		for _, path := range paths {
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				missing = append(missing, path)
-			}
-		}
-		if len(missing) > 0 {
+		if _, err := os.Stat(recipe.Path); os.IsNotExist(err) {
 			fmt.Printf("✗ %s integration not installed\n", recipe.Name)
 			fmt.Printf("  Run: bd setup %s\n", name)
-			for _, path := range missing {
-				fmt.Printf("  Missing: %s\n", path)
-			}
 			os.Exit(1)
 		}
-		fmt.Printf("✓ %s integration installed\n", recipe.Name)
-		for _, path := range paths {
-			fmt.Printf("  File: %s\n", path)
-		}
+		fmt.Printf("✓ %s integration installed: %s\n", recipe.Name, recipe.Path)
 		return
 	}
 
 	// Handle --remove
 	if setupRemove {
-		removed := false
-		for _, path := range paths {
-			if err := os.Remove(path); err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
-				FatalError("%v", err)
+		if err := os.Remove(recipe.Path); err != nil {
+			if os.IsNotExist(err) {
+				fmt.Println("No integration file found")
+				return
 			}
-			removed = true
-			// Best-effort cleanup for recipe-created parent directories. This only
-			// succeeds when the directory became empty after removing this file.
-			_ = os.Remove(filepath.Dir(path))
-		}
-		if !removed {
-			fmt.Println("No integration files found")
-			return
+			FatalError("%v", err)
 		}
 		fmt.Printf("✓ Removed %s integration\n", recipe.Name)
 		return
@@ -297,28 +267,20 @@ func runRecipe(name string) {
 	// Install
 	fmt.Printf("Installing %s integration...\n", recipe.Name)
 
-	for _, path := range paths {
-		// Ensure parent directory exists
-		dir := filepath.Dir(path)
-		if dir != "." && dir != "" {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				FatalError("create directory: %v", err)
-			}
+	// Ensure parent directory exists
+	dir := filepath.Dir(recipe.Path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			FatalError("create directory: %v", err)
 		}
+	}
 
-		content, err := recipes.ContentForPath(*recipe, path)
-		if err != nil {
-			FatalError("%v", err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil { // #nosec G306 -- config files need to be readable
-			FatalError("write file: %v", err)
-		}
+	if err := os.WriteFile(recipe.Path, []byte(recipes.Template), 0o644); err != nil { // #nosec G306 -- config files need to be readable
+		FatalError("write file: %v", err)
 	}
 
 	fmt.Printf("\n✓ %s integration installed\n", recipe.Name)
-	for _, path := range paths {
-		fmt.Printf("  File: %s\n", path)
-	}
+	fmt.Printf("  File: %s\n", recipe.Path)
 }
 
 // Legacy recipe handlers that delegate to existing implementations
@@ -373,14 +335,14 @@ func runFactoryRecipe() {
 
 func runCodexRecipe() {
 	if setupCheck {
-		setup.CheckCodex(setupGlobal)
+		setup.CheckCodex()
 		return
 	}
 	if setupRemove {
-		setup.RemoveCodex(setupGlobal)
+		setup.RemoveCodex()
 		return
 	}
-	setup.InstallCodex(setupGlobal)
+	setup.InstallCodex()
 }
 
 func runOpenCodeRecipe() {
@@ -442,7 +404,7 @@ func init() {
 	setupCmd.Flags().BoolVar(&setupCheck, "check", false, "Check if integration is installed")
 	setupCmd.Flags().BoolVar(&setupRemove, "remove", false, "Remove the integration")
 	setupCmd.Flags().BoolVar(&setupProject, "project", false, "Install for this project only (gemini/mux)")
-	setupCmd.Flags().BoolVar(&setupGlobal, "global", false, "Install globally (claude/codex/mux; writes to ~/.claude/settings.json, $CODEX_HOME/AGENTS.md or ~/.codex/AGENTS.md, or ~/.mux/AGENTS.md)")
+	setupCmd.Flags().BoolVar(&setupGlobal, "global", false, "Install globally (claude/mux; writes to ~/.claude/settings.json or ~/.mux/AGENTS.md)")
 	setupCmd.Flags().BoolVar(&setupStealth, "stealth", false, "Use stealth mode (claude/gemini)")
 
 	rootCmd.AddCommand(setupCmd)
