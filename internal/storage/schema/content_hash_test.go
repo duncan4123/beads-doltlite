@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,6 +34,34 @@ func TestEnsureContentHashColumnAddsWhenMissing(t *testing.T) {
 	}
 	if !added {
 		t.Fatal("ensureContentHashColumn added = false, want true when the column was missing")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestEnsureContentHashColumnFallsBackToSQLitePragma(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM INFORMATION_SCHEMA\.COLUMNS`).
+		WillReturnError(errors.New("no such table: INFORMATION_SCHEMA.COLUMNS"))
+	mock.ExpectQuery(`PRAGMA table_info\(schema_migrations\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
+			AddRow(0, "version", "INT", 0, nil, 1).
+			AddRow(1, "applied_at", "DATETIME", 1, nil, 0))
+	mock.ExpectExec(`ALTER TABLE schema_migrations ADD COLUMN content_hash CHAR\(64\)`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	added, err := mainSource.ensureContentHashColumn(context.Background(), db)
+	if err != nil {
+		t.Fatalf("ensureContentHashColumn: %v", err)
+	}
+	if !added {
+		t.Fatal("ensureContentHashColumn added = false, want true when SQLite metadata lacks the column")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

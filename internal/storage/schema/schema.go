@@ -737,16 +737,59 @@ func (m migrationSource) bootstrapSQL() string {
 }
 
 // hasContentHashColumn reports whether the cursor table already carries the
-// content_hash column. It probes INFORMATION_SCHEMA, so a not-yet-created table
-// simply reports false.
+// content_hash column. It probes INFORMATION_SCHEMA for Dolt/MySQL-compatible
+// engines and falls back to SQLite PRAGMA metadata for DoltLite.
 func (m migrationSource) hasContentHashColumn(ctx context.Context, db DBConn) (bool, error) {
 	var count int
 	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'content_hash'`,
 		m.cursorTable).Scan(&count); err != nil {
-		return false, fmt.Errorf("checking %s.content_hash: %w", m.cursorTable, err)
+		if !isMissingInformationSchemaError(err) {
+			return false, fmt.Errorf("checking %s.content_hash: %w", m.cursorTable, err)
+		}
+		has, pragmaErr := m.hasContentHashColumnSQLite(ctx, db)
+		if pragmaErr != nil {
+			return false, fmt.Errorf("checking %s.content_hash: %w", m.cursorTable, pragmaErr)
+		}
+		return has, nil
 	}
 	return count > 0, nil
+}
+
+func isMissingInformationSchemaError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "information_schema.columns") ||
+		strings.Contains(msg, "information_schema") ||
+		strings.Contains(msg, "no such table")
+}
+
+func (m migrationSource) hasContentHashColumnSQLite(ctx context.Context, db DBConn) (bool, error) {
+	//nolint:gosec // G201: m.cursorTable is a hardcoded constant.
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+m.cursorTable+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == "content_hash" {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // ensureContentHashColumn adds the content_hash column to an existing cursor

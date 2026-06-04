@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/steveyegge/beads/internal/types"
 )
@@ -58,19 +59,27 @@ const waitsForGateBlockedSQL = `
 `
 
 func RecomputeIsBlockedInTx(ctx context.Context, tx DBTX, issueIDs, wispIDs []string) error {
+	return recomputeIsBlockedInTx(ctx, tx, issueIDs, wispIDs, false)
+}
+
+func RecomputeIsBlockedSQLiteInTx(ctx context.Context, tx DBTX, issueIDs, wispIDs []string) error {
+	return recomputeIsBlockedInTx(ctx, tx, issueIDs, wispIDs, true)
+}
+
+func recomputeIsBlockedInTx(ctx context.Context, tx DBTX, issueIDs, wispIDs []string, sqlite bool) error {
 	if len(issueIDs) == 0 && len(wispIDs) == 0 {
 		return nil
 	}
 	for {
 		var changed int64
 
-		n, err := recomputeIsBlockedPassForIssuesInTx(ctx, tx, issueIDs)
+		n, err := recomputeIsBlockedPassForIssuesInTx(ctx, tx, issueIDs, sqlite)
 		if err != nil {
 			return err
 		}
 		changed += n
 
-		n, err = recomputeIsBlockedPassForWispsInTx(ctx, tx, wispIDs)
+		n, err = recomputeIsBlockedPassForWispsInTx(ctx, tx, wispIDs, sqlite)
 		if err != nil {
 			return err
 		}
@@ -83,19 +92,27 @@ func RecomputeIsBlockedInTx(ctx context.Context, tx DBTX, issueIDs, wispIDs []st
 }
 
 func MarkIsBlockedInTx(ctx context.Context, tx DBTX, issueIDs, wispIDs []string) error {
+	return markIsBlockedInTx(ctx, tx, issueIDs, wispIDs, false)
+}
+
+func MarkIsBlockedSQLiteInTx(ctx context.Context, tx DBTX, issueIDs, wispIDs []string) error {
+	return markIsBlockedInTx(ctx, tx, issueIDs, wispIDs, true)
+}
+
+func markIsBlockedInTx(ctx context.Context, tx DBTX, issueIDs, wispIDs []string, sqlite bool) error {
 	if len(issueIDs) == 0 && len(wispIDs) == 0 {
 		return nil
 	}
 	for {
 		var changed int64
 
-		n, err := markIsBlockedPassForIssuesInTx(ctx, tx, issueIDs)
+		n, err := markIsBlockedPassForIssuesInTx(ctx, tx, issueIDs, sqlite)
 		if err != nil {
 			return err
 		}
 		changed += n
 
-		n, err = markIsBlockedPassForWispsInTx(ctx, tx, wispIDs)
+		n, err = markIsBlockedPassForWispsInTx(ctx, tx, wispIDs, sqlite)
 		if err != nil {
 			return err
 		}
@@ -116,19 +133,29 @@ func RecomputeIsBlockedForWispIDsInTx(ctx context.Context, tx DBTX, ids []string
 }
 
 //nolint:gosec // G201: SQL templates are constant; only IN-clause placeholders are formatted in.
-func recomputeIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
+func recomputeIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string, sqlite bool) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues(), ids)
+	markTmpl := markBlockedTemplateForIssues()
+	unmarkTmpl := unmarkBlockedTemplateForIssues()
+	if sqlite {
+		markTmpl = sqliteBlockedTemplate(markTmpl)
+		unmarkTmpl = sqliteBlockedTemplate(unmarkTmpl)
+	}
+	return runMarkUnmarkBatchedInTx(ctx, tx, markTmpl, unmarkTmpl, ids)
 }
 
-func markIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
+func markIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string, sqlite bool) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), ids)
+	markTmpl := markBlockedTemplateForIssues()
+	if sqlite {
+		markTmpl = sqliteBlockedTemplate(markTmpl)
+	}
+	return runMarkBatchedInTx(ctx, tx, markTmpl, ids)
 }
 
 // The mark/unmark templates explicitly assign updated_at to itself:
@@ -229,19 +256,29 @@ func unmarkBlockedTemplateForIssues() string {
 }
 
 //nolint:gosec // G201: SQL templates are constant; only IN-clause placeholders are formatted in.
-func recomputeIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
+func recomputeIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []string, sqlite bool) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
 
-	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), unmarkBlockedTemplateForWisps(), ids)
+	markTmpl := markBlockedTemplateForWisps()
+	unmarkTmpl := unmarkBlockedTemplateForWisps()
+	if sqlite {
+		markTmpl = sqliteBlockedTemplate(markTmpl)
+		unmarkTmpl = sqliteBlockedTemplate(unmarkTmpl)
+	}
+	return runMarkUnmarkBatchedInTx(ctx, tx, markTmpl, unmarkTmpl, ids)
 }
 
-func markIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
+func markIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []string, sqlite bool) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), ids)
+	markTmpl := markBlockedTemplateForWisps()
+	if sqlite {
+		markTmpl = sqliteBlockedTemplate(markTmpl)
+	}
+	return runMarkBatchedInTx(ctx, tx, markTmpl, ids)
 }
 
 func markBlockedTemplateForWisps() string {
@@ -332,6 +369,22 @@ func unmarkBlockedTemplateForWisps() string {
 		    )
 		  )
 	`, waitsForGateBlockedSQL)
+}
+
+func sqliteBlockedTemplate(tmpl string) string {
+	replacer := strings.NewReplacer(
+		"UPDATE issues i SET i.is_blocked = 1, i.updated_at = i.updated_at",
+		"UPDATE issues AS i SET is_blocked = 1, updated_at = updated_at",
+		"UPDATE issues i SET i.is_blocked = 0, i.updated_at = i.updated_at",
+		"UPDATE issues AS i SET is_blocked = 0, updated_at = updated_at",
+		"UPDATE wisps w SET w.is_blocked = 1, w.updated_at = w.updated_at",
+		"UPDATE wisps AS w SET is_blocked = 1, updated_at = updated_at",
+		"UPDATE wisps w SET w.is_blocked = 0, w.updated_at = w.updated_at",
+		"UPDATE wisps AS w SET is_blocked = 0, updated_at = updated_at",
+		"JSON_UNQUOTE(JSON_EXTRACT(d.metadata, '$.gate'))",
+		"JSON_EXTRACT(d.metadata, '$.gate')",
+	)
+	return replacer.Replace(tmpl)
 }
 
 //nolint:gosec // G201: callers pass constant templates; only IN-clause placeholders are formatted in.

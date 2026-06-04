@@ -103,12 +103,12 @@ func recomputeIsBlockedCounting(ctx context.Context, tx DBTX, issueIDs, wispIDs 
 	var total int64
 	for {
 		var changed int64
-		n, err := recomputeIsBlockedPassForIssuesInTx(ctx, tx, issueIDs)
+		n, err := recomputeIsBlockedPassForIssuesInTx(ctx, tx, issueIDs, false)
 		if err != nil {
 			return total, err
 		}
 		changed += n
-		n, err = recomputeIsBlockedPassForWispsInTx(ctx, tx, wispIDs)
+		n, err = recomputeIsBlockedPassForWispsInTx(ctx, tx, wispIDs, false)
 		if err != nil {
 			return total, err
 		}

@@ -524,8 +524,9 @@ FROM schema_migrations`)
 	if got := rows[0]["max_version"]; got != want {
 		t.Fatalf("MAX(version) = %s, want %s", got, want)
 	}
-	if got := rows[0]["version_count"]; got != want {
-		t.Fatalf("COUNT(*) = %s, want %s", got, want)
+	wantCount := strconv.Itoa(len(mainSource.list()))
+	if got := rows[0]["version_count"]; got != wantCount {
+		t.Fatalf("COUNT(*) = %s, want %s", got, wantCount)
 	}
 
 	requireDoltNoRows(t, dir, `

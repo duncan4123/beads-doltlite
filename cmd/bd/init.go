@@ -1991,6 +1991,39 @@ Aborting.`, ui.RenderWarn("⚠"), location, ui.RenderAccent("bd list"), prefix)
 		// database. Skip the SQLite checks below and allow init to proceed.
 		return nil
 	}
+	// Check for existing doltlite database
+	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		doltliteDir := filepath.Join(beadsDir, "doltlite")
+		entries, err := os.ReadDir(doltliteDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil // No doltlite directory — fresh clone, safe to init
+			}
+			return fmt.Errorf("failed to read doltlite directory %s: %w", doltliteDir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if strings.HasSuffix(entry.Name(), ".db") {
+				location := filepath.Join(doltliteDir, entry.Name())
+				return fmt.Errorf(`
+%s Found existing doltlite database: %s
+
+This workspace is already initialized.
+
+To use the existing database:
+  Just run bd commands normally (e.g., %s)
+
+If the database is genuinely corrupt and unrecoverable:
+  bd export > backup.jsonl              # Back up first!
+  bd init --force --prefix %s           # Then reinitialize
+
+Aborting.`, ui.RenderWarn("⚠"), location, ui.RenderAccent("bd list"), prefix)
+			}
+		}
+		return nil // doltlite directory exists but no .db files — safe to init
+	}
 
 	// Check for redirect file - if present, check the redirect target
 	redirectTarget := beads.FollowRedirect(beadsDir)

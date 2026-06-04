@@ -87,7 +87,13 @@ type AddDependencyOpts struct {
 	// SkipCycleCheck skips the recursive pre-insert cycle check for callers
 	// that intentionally trade validation cost for bulk graph wiring speed.
 	SkipCycleCheck bool
-	TargetKind     *DepTargetKind
+	// SkipBlockedRecompute skips derived is_blocked maintenance for backends
+	// that recompute the state through a backend-specific SQL path.
+	SkipBlockedRecompute bool
+	// UseSQLiteBlockedRecompute uses SQLite-compatible UPDATE/JSON syntax for
+	// derived is_blocked maintenance.
+	UseSQLiteBlockedRecompute bool
+	TargetKind                *DepTargetKind
 }
 
 // AddDependencyInTx validates and inserts a dependency within an existing
@@ -215,9 +221,12 @@ func AddDependencyInTx(ctx context.Context, tx *sql.Tx, dep *types.Dependency, a
 	//nolint:gosec // G201: writeTable from WispTableRouting; targetCol from DepTargetKind.Column()
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s (id, issue_id, %s, type, created_at, created_by, metadata, thread_id)
-		VALUES (?, ?, ?, ?, NOW(), ?, ?, ?)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
 	`, writeTable, targetCol), depid.New(dep.IssueID, dep.DependsOnID), dep.IssueID, dep.DependsOnID, dep.Type, actor, metadata, dep.ThreadID); err != nil {
 		return fmt.Errorf("failed to add dependency: %w", err)
+	}
+	if opts.SkipBlockedRecompute {
+		return nil
 	}
 
 	srcIsWisp := writeTable == "wisp_dependencies"
@@ -240,12 +249,22 @@ func AddDependencyInTx(ctx context.Context, tx *sql.Tx, dep *types.Dependency, a
 	if dep.Type == types.DepParentChild {
 		// Parent-child adds are not monotonic: adding an already-closed child can
 		// satisfy an any-children waits-for gate and unblock the waiter.
-		if err := RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps); err != nil {
+		if opts.UseSQLiteBlockedRecompute {
+			err = RecomputeIsBlockedSQLiteInTx(ctx, tx, affectedIssues, affectedWisps)
+		} else {
+			err = RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps)
+		}
+		if err != nil {
 			return fmt.Errorf("recompute is_blocked after add dependency %s -> %s: %w", dep.IssueID, dep.DependsOnID, err)
 		}
 		return nil
 	}
-	if err := MarkIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps); err != nil {
+	if opts.UseSQLiteBlockedRecompute {
+		err = MarkIsBlockedSQLiteInTx(ctx, tx, affectedIssues, affectedWisps)
+	} else {
+		err = MarkIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps)
+	}
+	if err != nil {
 		return fmt.Errorf("mark is_blocked after add dependency %s -> %s: %w", dep.IssueID, dep.DependsOnID, err)
 	}
 	return nil
@@ -297,7 +316,7 @@ func markDirectBlockingDependencySourceInTx(ctx context.Context, tx *sql.Tx, sou
 	// treat it as an independent rowset, satisfying the restriction. Dolt
 	// accepts both forms, so this is a no-op there.
 	_, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		UPDATE %s s SET s.is_blocked = 1, s.updated_at = s.updated_at
+		UPDATE %s AS s SET is_blocked = 1, updated_at = updated_at
 		WHERE s.id = ?
 		  AND s.is_blocked = 0
 		  AND s.status <> 'closed' AND s.status <> 'pinned'

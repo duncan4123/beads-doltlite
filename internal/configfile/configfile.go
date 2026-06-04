@@ -169,7 +169,8 @@ func (c *Config) GetStaleClosedIssuesDays() int {
 
 // Backend constants
 const (
-	BackendDolt = "dolt"
+	BackendDolt     = "dolt"
+	BackendDoltlite = "doltlite"
 )
 
 // BackendCapabilities describes behavioral constraints for a storage backend.
@@ -204,9 +205,17 @@ func (c *Config) GetCapabilities() BackendCapabilities {
 	return CapabilitiesForBackend(backend)
 }
 
-// GetBackend returns the backend type. Always returns "dolt".
+// GetBackend returns the backend type. Legacy or unknown values are normalized
+// to Dolt, but DoltLite is preserved for embedded DoltLite workspaces.
 func (c *Config) GetBackend() string {
+	if c != nil && c.Backend == BackendDoltlite {
+		return BackendDoltlite
+	}
 	return BackendDolt
+}
+
+func (c *Config) IsDoltliteBackend() bool {
+	return c != nil && c.GetBackend() == BackendDoltlite
 }
 
 // Dolt mode constants
