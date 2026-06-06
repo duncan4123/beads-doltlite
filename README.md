@@ -75,6 +75,35 @@ npm install -g @beads/bd     # Node.js users
 
 **Requirements:** macOS, Linux, Windows, or FreeBSD. See [docs/INSTALLING.md](docs/INSTALLING.md) for complete installation guide.
 
+### DoltLite-Linked Fork Build
+
+This fork builds the `bd` CLI against an already-built DoltLite shared
+library. It does not build DoltLite itself. The DoltLite build directory must
+contain `libdoltlite.so` (or the platform equivalent) and `sqlite3.h`.
+
+Keep Go build artifacts in one explicit cache root so local builds do not
+scatter large caches under `$HOME` or temporary directories:
+
+```bash
+export CACHE_ROOT=/data/projects/doltlite-gascity/.cache/go
+mkdir -p "$CACHE_ROOT/build" "$CACHE_ROOT/mod" "$CACHE_ROOT/tmp"
+export GOCACHE="$CACHE_ROOT/build"
+export GOMODCACHE="$CACHE_ROOT/mod"
+export GOTMPDIR="$CACHE_ROOT/tmp"
+
+export DOLTLITE_BUILD_DIR=/data/projects/doltlite-gascity/doltlite-work/build
+export CGO_ENABLED=1
+export CGO_CFLAGS="-I${DOLTLITE_BUILD_DIR}"
+export CGO_LDFLAGS="-L${DOLTLITE_BUILD_DIR} -Wl,-rpath,${DOLTLITE_BUILD_DIR} -ldoltlite"
+export GOFLAGS="-tags=libsqlite3"
+
+go build -o bin/bd ./cmd/bd
+```
+
+In the T3 monorepo, the `ship` branch wraps this contract in
+`packages/beads-doltlite/scripts/build.mjs`; run the package build there
+instead of manually invoking `go build`.
+
 ### Security And Verification
 
 Before trusting any downloaded binary, verify its checksum against the release `checksums.txt`.

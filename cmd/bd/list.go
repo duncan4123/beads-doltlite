@@ -385,6 +385,8 @@ var listCmd = &cobra.Command{
 		emptyDesc, _ := cmd.Flags().GetBool("empty-description")
 		noAssignee, _ := cmd.Flags().GetBool("no-assignee")
 		noLabels, _ := cmd.Flags().GetBool("no-labels")
+		skipLabels, _ := cmd.Flags().GetBool("skip-labels")
+		includeEphemeral, _ := cmd.Flags().GetBool("include-ephemeral")
 
 		// Priority range flags
 		priorityMinStr, _ := cmd.Flags().GetString("priority-min")
@@ -895,6 +897,9 @@ var listCmd = &cobra.Command{
 			// This ensures bd list --ready matches bd ready behavior,
 			// excluding issues with open blocks dependencies.
 			wf := readyWorkFilterFromIssueFilter(filter)
+			if includeEphemeral {
+				wf.IncludeEphemeral = true
+			}
 			var err error
 			issues, err = activeStore.GetReadyWork(ctx, wf)
 			if err != nil {
@@ -971,7 +976,10 @@ var listCmd = &cobra.Command{
 				issueIDs[i] = issue.ID
 			}
 			// Best effort: display gracefully degrades with empty data
-			labelsMap, _ := activeStore.GetLabelsForIssues(ctx, issueIDs)
+			labelsMap := map[string][]string{}
+			if !skipLabels {
+				labelsMap, _ = activeStore.GetLabelsForIssues(ctx, issueIDs)
+			}
 			depCounts, _ := activeStore.GetDependencyCounts(ctx, issueIDs)
 			allDeps, _ := activeStore.GetDependencyRecordsForIssues(ctx, issueIDs)
 			commentCounts, _ := activeStore.GetCommentCounts(ctx, issueIDs)
@@ -1019,7 +1027,10 @@ var listCmd = &cobra.Command{
 			issueIDs[i] = issue.ID
 		}
 		// Best effort: display gracefully degrades with empty data
-		labelsMap, _ := activeStore.GetLabelsForIssues(ctx, issueIDs)
+		labelsMap := map[string][]string{}
+		if !skipLabels {
+			labelsMap, _ = activeStore.GetLabelsForIssues(ctx, issueIDs)
+		}
 
 		// Load blocking info for displayed issues only (bd-7di).
 		// Previously loaded ALL dependency records which was O(total_issues) and took 2-4s.
@@ -1105,6 +1116,8 @@ func init() {
 	listCmd.Flags().Bool("empty-description", false, "Filter issues with empty or missing description")
 	listCmd.Flags().Bool("no-assignee", false, "Filter issues with no assignee")
 	listCmd.Flags().Bool("no-labels", false, "Filter issues with no labels")
+	listCmd.Flags().Bool("skip-labels", false, "Skip loading labels in output")
+	listCmd.Flags().Bool("include-ephemeral", false, "Include ephemeral issues (wisps) in results")
 
 	// Priority ranges
 	listCmd.Flags().String("priority-min", "", "Filter by minimum priority (inclusive, 0-4 or P0-P4)")

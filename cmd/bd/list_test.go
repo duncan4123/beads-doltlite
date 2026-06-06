@@ -1646,4 +1646,15 @@ func TestListCommandInit(t *testing.T) {
 	if excludeLabelFlag.DefValue != "[]" {
 		t.Errorf("--exclude-label default should be '[]', got %q", excludeLabelFlag.DefValue)
 	}
+
+	// Verify Gas City compatibility flags exist.
+	for _, name := range []string{"skip-labels", "include-ephemeral"} {
+		flag := listCmd.Flags().Lookup(name)
+		if flag == nil {
+			t.Fatalf("--%s flag should exist on bd list", name)
+		}
+		if flag.DefValue != "false" {
+			t.Errorf("--%s default should be false, got %q", name, flag.DefValue)
+		}
+	}
 }
