@@ -265,12 +265,7 @@ func GetReadyWorkInTxWithDialect(
 
 	// When IncludeEphemeral is set, also query the wisps table.
 	if filter.IncludeEphemeral {
-		ephTrue := true
-		wispFilter := types.IssueFilter{Limit: filter.Limit, Ephemeral: &ephTrue}
-		if filter.Status != "" {
-			s := filter.Status
-			wispFilter.Status = &s
-		}
+		wispFilter := readyWispIssueFilter(filter)
 		wisps, wErr := SearchIssuesInTxWithDialect(ctx, tx, "", wispFilter, dialect)
 		if wErr == nil {
 			ordered = append(ordered, wisps...)
@@ -278,6 +273,54 @@ func GetReadyWorkInTxWithDialect(
 	}
 
 	return ordered, nil
+}
+
+func readyWispIssueFilter(filter types.WorkFilter) types.IssueFilter {
+	ephTrue := true
+	wispFilter := types.IssueFilter{
+		Priority:       filter.Priority,
+		Assignee:       filter.Assignee,
+		Labels:         filter.Labels,
+		LabelsAny:      filter.LabelsAny,
+		ExcludeLabels:  filter.ExcludeLabels,
+		LabelPattern:   filter.LabelPattern,
+		LabelRegex:     filter.LabelRegex,
+		Limit:          filter.Limit,
+		Ephemeral:      &ephTrue,
+		ParentID:       filter.ParentID,
+		MolType:        filter.MolType,
+		WispType:       filter.WispType,
+		ExcludeTypes:   filter.ExcludeTypes,
+		MetadataFields: filter.MetadataFields,
+		HasMetadataKey: filter.HasMetadataKey,
+	}
+	if filter.Status != "" {
+		s := filter.Status
+		wispFilter.Status = &s
+	}
+	if filter.Type != "" {
+		t := types.IssueType(filter.Type)
+		wispFilter.IssueType = &t
+	} else {
+		wispFilter.ExcludeTypes = append(defaultReadyExcludeTypes(), filter.ExcludeTypes...)
+	}
+	if filter.Unassigned {
+		wispFilter.NoAssignee = true
+		wispFilter.Assignee = nil
+	}
+	return wispFilter
+}
+
+func defaultReadyExcludeTypes() []types.IssueType {
+	return []types.IssueType{
+		types.IssueType("merge-request"),
+		types.TypeGate,
+		types.TypeMolecule,
+		types.TypeMessage,
+		types.IssueType("agent"),
+		types.IssueType("role"),
+		types.IssueType("rig"),
+	}
 }
 
 // getChildrenOfDeferredParentsInTx returns IDs of issues whose parent has a
