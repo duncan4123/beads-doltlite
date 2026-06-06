@@ -137,5 +137,7 @@ bd_test
 .beads/proxieddb/
 
 # Gas City
+.gc/
+bin/
 .beads/*
 !.beads/identity.toml
