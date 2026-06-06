@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 )
@@ -114,15 +115,27 @@ func displayShowIssueReturn(ctx context.Context, issueID string) *types.Issue {
 		fmt.Printf("\n%s\n%s\n", ui.RenderBold("ACCEPTANCE CRITERIA"), ui.RenderMarkdown(issue.AcceptanceCriteria))
 	}
 
+
+	// Run all detail queries in a single transaction to avoid per-query
+	// MVCC snapshot overhead on doltlite backends.
+	var labels []string
+	var depsWithMeta, dependentsWithMeta []*types.IssueWithDependencyMetadata
+	var comments []*types.Comment
+	_ = issueStore.RunInTransaction(ctx, "", func(tx storage.Transaction) error {
+		labels, _ = tx.GetLabels(ctx, issue.ID)
+		depsWithMeta, _ = tx.GetDependenciesWithMetadata(ctx, issue.ID)
+		dependentsWithMeta, _ = tx.GetDependentsWithMetadata(ctx, issue.ID)
+		comments, _ = tx.GetIssueComments(ctx, issue.ID)
+		return nil
+	})
+
 	// Labels
-	labels, _ := issueStore.GetLabels(ctx, issue.ID)
 	if len(labels) > 0 {
 		fmt.Printf("\n%s %s\n", ui.RenderBold("LABELS:"), strings.Join(labels, ", "))
 	}
 
 	// Dependencies (what this issue depends on)
 	relatedSeen := make(map[string]*types.IssueWithDependencyMetadata)
-	depsWithMeta, _ := issueStore.GetDependenciesWithMetadata(ctx, issue.ID)
 
 	if len(depsWithMeta) > 0 {
 		var blocks, parent, discovered []*types.IssueWithDependencyMetadata
@@ -161,7 +174,6 @@ func displayShowIssueReturn(ctx context.Context, issueID string) *types.Issue {
 	}
 
 	// Dependents (what depends on this issue)
-	dependentsWithMeta, _ := issueStore.GetDependentsWithMetadata(ctx, issue.ID)
 	if len(dependentsWithMeta) > 0 {
 		var blocks, children, discovered []*types.IssueWithDependencyMetadata
 		for _, dep := range dependentsWithMeta {
@@ -207,7 +219,6 @@ func displayShowIssueReturn(ctx context.Context, issueID string) *types.Issue {
 	}
 
 	// Comments
-	comments, _ := issueStore.GetIssueComments(ctx, issue.ID)
 	if len(comments) > 0 {
 		fmt.Printf("\n%s\n", ui.RenderBold("COMMENTS"))
 		for _, comment := range comments {
@@ -218,7 +229,6 @@ func displayShowIssueReturn(ctx context.Context, issueID string) *types.Issue {
 			}
 		}
 	}
-
 	fmt.Println()
 	return issue
 }

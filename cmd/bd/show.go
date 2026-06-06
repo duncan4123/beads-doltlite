@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 	"github.com/steveyegge/beads/internal/ui"
 )
@@ -142,13 +143,17 @@ var showCmd = &cobra.Command{
 			if jsonOutput {
 				// Include labels, dependencies (with metadata), dependents (with metadata), and comments in JSON output
 				details := &types.IssueDetails{Issue: *issue}
-				details.Labels, _ = issueStore.GetLabels(ctx, issue.ID) // Best effort: show issue even if label fetch fails
 
-				// Get dependencies with metadata (dependency_type field)
-				details.Dependencies, _ = issueStore.GetDependenciesWithMetadata(ctx, issue.ID) // Best effort: show issue even if deps unavailable
-				details.Dependents, _ = issueStore.GetDependentsWithMetadata(ctx, issue.ID)     // Best effort: show issue even if dependents unavailable
-
-				details.Comments, _ = issueStore.GetIssueComments(ctx, issue.ID) // Best effort: show issue even if comments unavailable
+				// Run all detail queries in a single transaction to avoid per-query
+				// MVCC snapshot overhead on doltlite backends (6+ separate withConn
+				// calls → 1 transaction).
+				_ = issueStore.RunInTransaction(ctx, "", func(tx storage.Transaction) error {
+					details.Labels, _ = tx.GetLabels(ctx, issue.ID)
+					details.Dependencies, _ = tx.GetDependenciesWithMetadata(ctx, issue.ID)
+					details.Dependents, _ = tx.GetDependentsWithMetadata(ctx, issue.ID)
+					details.Comments, _ = tx.GetIssueComments(ctx, issue.ID)
+					return nil
+				})
 
 				// Epic progress: count children status for epic issues
 				if issue.IssueType == types.TypeEpic && details.Dependents != nil {
@@ -221,8 +226,19 @@ var showCmd = &cobra.Command{
 				fmt.Printf("\n%s\n%s\n", ui.RenderBold("ACCEPTANCE CRITERIA"), ui.RenderMarkdown(issue.AcceptanceCriteria))
 			}
 
+			// Run all detail queries in a single transaction to avoid per-query
+			var labels []string
+			var depsWithMeta, dependentsWithMeta []*types.IssueWithDependencyMetadata
+			var comments []*types.Comment
+			_ = issueStore.RunInTransaction(ctx, "", func(tx storage.Transaction) error {
+				labels, _ = tx.GetLabels(ctx, issue.ID)
+				depsWithMeta, _ = tx.GetDependenciesWithMetadata(ctx, issue.ID)
+				dependentsWithMeta, _ = tx.GetDependentsWithMetadata(ctx, issue.ID)
+				comments, _ = tx.GetIssueComments(ctx, issue.ID)
+				return nil
+			})
+
 			// Show labels
-			labels, _ := issueStore.GetLabels(ctx, issue.ID) // Best effort: show issue even if label fetch fails
 			if len(labels) > 0 {
 				fmt.Printf("\n%s %s\n", ui.RenderBold("LABELS:"), strings.Join(labels, ", "))
 			}
@@ -237,8 +253,6 @@ var showCmd = &cobra.Command{
 			relatedSeen := make(map[string]*types.IssueWithDependencyMetadata)
 
 			// Show dependencies - grouped by dependency type for clarity
-			depsWithMeta, _ := issueStore.GetDependenciesWithMetadata(ctx, issue.ID) // Best effort: show issue even if deps unavailable
-
 			if len(depsWithMeta) > 0 {
 				// Group by dependency type
 				var blocks, parent, discovered []*types.IssueWithDependencyMetadata
@@ -278,7 +292,6 @@ var showCmd = &cobra.Command{
 			}
 
 			// Show dependents - grouped by dependency type for clarity
-			dependentsWithMeta, _ := issueStore.GetDependentsWithMetadata(ctx, issue.ID) // Best effort: show issue even if dependents unavailable
 			if len(dependentsWithMeta) > 0 {
 				// Group by dependency type
 				var blocks, children, discovered []*types.IssueWithDependencyMetadata
@@ -342,9 +355,7 @@ var showCmd = &cobra.Command{
 					fmt.Println(formatDependencyLine("↔", dep))
 				}
 			}
-
 			// Show comments
-			comments, _ := issueStore.GetIssueComments(ctx, issue.ID) // Best effort: show issue even if comments unavailable
 			if len(comments) > 0 {
 				fmt.Printf("\n%s\n", ui.RenderBold("COMMENTS"))
 				for _, comment := range comments {
