@@ -181,7 +181,15 @@ func (t *embeddedTransaction) ImportIssueComment(ctx context.Context, issueID, a
 }
 
 func (t *embeddedTransaction) GetIssueComments(ctx context.Context, issueID string) ([]*types.Comment, error) {
-	return nil, fmt.Errorf("embeddedTransaction: GetIssueComments not implemented")
+	return issueops.GetIssueCommentsInTx(ctx, t.tx, issueID)
+}
+
+func (t *embeddedTransaction) GetDependenciesWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error) {
+	return issueops.GetDependenciesWithMetadataInTx(ctx, t.tx, issueID)
+}
+
+func (t *embeddedTransaction) GetDependentsWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error) {
+	return issueops.GetDependentsWithMetadataInTx(ctx, t.tx, issueID)
 }
 
 func (t *embeddedTransaction) CreateIssueImport(ctx context.Context, issue *types.Issue, actor string, skipPrefixValidation bool) error {

@@ -699,6 +699,14 @@ func (t *doltTransaction) GetDependencyRecords(ctx context.Context, issueID stri
 	return deps, rows.Err()
 }
 
+func (t *doltTransaction) GetDependenciesWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error) {
+	return issueops.GetDependenciesWithMetadataInTx(ctx, t.tx, issueID)
+}
+
+func (t *doltTransaction) GetDependentsWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error) {
+	return issueops.GetDependentsWithMetadataInTx(ctx, t.tx, issueID)
+}
+
 // RemoveDependency removes a dependency within the transaction
 func (t *doltTransaction) RemoveDependency(ctx context.Context, issueID, dependsOnID string, actor string) error {
 	table := "dependencies"
