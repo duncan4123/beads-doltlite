@@ -258,6 +258,8 @@ type Transaction interface {
 	AddDependencyWithOptions(ctx context.Context, dep *types.Dependency, actor string, opts DependencyAddOptions) error
 	RemoveDependency(ctx context.Context, issueID, dependsOnID string, actor string) error
 	GetDependencyRecords(ctx context.Context, issueID string) ([]*types.Dependency, error)
+	GetDependenciesWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error)
+	GetDependentsWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error)
 
 	// Label operations
 	AddLabel(ctx context.Context, issueID, label, actor string) error
