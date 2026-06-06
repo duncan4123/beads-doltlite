@@ -79,17 +79,32 @@ func resolveAndGetIssueWithRouting(ctx context.Context, localStore storage.DoltS
 }
 
 // resolveAndGetFromStore resolves a partial ID and gets the issue from a specific store.
+// For already-qualified IDs (containing a hyphen), GetIssue is tried directly first
+// to avoid the double-fetch that ResolvePartialID + GetIssue would incur.
 func resolveAndGetFromStore(ctx context.Context, s storage.DoltStorage, id string, routed bool) (*RoutedResult, error) {
-	// First, resolve the partial ID
-	resolvedID, err := utils.ResolvePartialID(ctx, s, id)
-	if err != nil {
-		return nil, err
+	var resolvedID string
+	var issue *types.Issue
+	var err error
+
+	// Fast path: if the ID looks fully qualified (contains a hyphen), try GetIssue directly.
+	// ResolvePartialID's first step is also GetIssue(id), so skipping it avoids a double-fetch.
+	if strings.Contains(id, "-") {
+		issue, err = s.GetIssue(ctx, id)
+		if err == nil && issue != nil {
+			resolvedID = issue.ID
+		}
 	}
 
-	// Then get the issue
-	issue, err := s.GetIssue(ctx, resolvedID)
-	if err != nil {
-		return nil, err
+	// Fall back to partial ID resolution if direct lookup failed.
+	if issue == nil {
+		resolvedID, err = utils.ResolvePartialID(ctx, s, id)
+		if err != nil {
+			return nil, err
+		}
+		issue, err = s.GetIssue(ctx, resolvedID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &RoutedResult{

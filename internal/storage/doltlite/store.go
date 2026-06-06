@@ -150,8 +150,13 @@ func (s *DoltliteStore) openPersistentDB(ctx context.Context) error {
 	if s.db != nil {
 		return nil
 	}
-	db, cleanup, err := OpenSQL(ctx, s.dataDir, s.database, s.branch)
-	if err != nil {
+	var db *sql.DB
+	var cleanup func() error
+	if err := s.withRetry(ctx, func() error {
+		var err error
+		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, s.branch)
+		return err
+	}); err != nil {
 		return err
 	}
 	s.db = db
@@ -166,7 +171,15 @@ func (s *DoltliteStore) activeDB(ctx context.Context) (*sql.DB, func() error, er
 	if db != nil {
 		return db, func() error { return nil }, nil
 	}
-	return OpenSQL(ctx, s.dataDir, s.database, s.branch)
+	var cleanup func() error
+	if err := s.withRetry(ctx, func() error {
+		var err error
+		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, s.branch)
+		return err
+	}); err != nil {
+		return nil, nil, err
+	}
+	return db, cleanup, nil
 }
 
 // withRootConn opens a short-lived database connection without selecting any
@@ -313,7 +326,8 @@ func isRetryableConcurrencyError(err error) bool {
 	return strings.Contains(msg, "sqlite_busy") ||
 		strings.Contains(msg, "database is locked") ||
 		strings.Contains(msg, "another connection committed") ||
-		strings.Contains(msg, "please retry your transaction")
+		strings.Contains(msg, "please retry your transaction") ||
+		strings.Contains(msg, "failed to prepare catalog")
 }
 
 // initSchema creates the database (if needed) and runs all pending migrations,
@@ -331,8 +345,13 @@ func (s *DoltliteStore) initSchema(ctx context.Context) error {
 		return fmt.Errorf("doltlite: invalid database name: %q", s.database)
 	}
 
-	db, cleanup, err := OpenSQL(ctx, s.dataDir, s.database, s.branch)
-	if err != nil {
+	var db *sql.DB
+	var cleanup func() error
+	if err := s.withRetry(ctx, func() error {
+		var err error
+		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, s.branch)
+		return err
+	}); err != nil {
 		return fmt.Errorf("doltlite: open for schema init: %w", err)
 	}
 	defer func() { _ = cleanup() }()
