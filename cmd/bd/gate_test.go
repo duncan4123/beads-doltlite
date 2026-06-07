@@ -46,6 +46,10 @@ func (f *fakeGateCheckStore) CloseIssue(_ context.Context, id, reason, actor, se
 	return nil
 }
 
+func (f *fakeGateCheckStore) CommitPending(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
 func captureGateStdout(t *testing.T, fn func()) string {
 	t.Helper()
 
@@ -649,6 +653,82 @@ func TestGateCheck_GHRunWorkflowDiscoveryPersistence(t *testing.T) {
 	}
 }
 
+func TestGateCheck_GHRunTransitionsFromPendingToSuccess(t *testing.T) {
+	installSequentialFakeGHRunScript(t)
+
+	origStore := store
+	origRootCtx := rootCtx
+	origJSONOutput := jsonOutput
+	origReadonlyMode := readonlyMode
+	origActor := actor
+	t.Cleanup(func() {
+		store = origStore
+		rootCtx = origRootCtx
+		jsonOutput = origJSONOutput
+		readonlyMode = origReadonlyMode
+		actor = origActor
+		resetGateCheckFlags(t)
+	})
+
+	resetGateCheckFlags(t)
+
+	fakeStore := &fakeGateCheckStore{
+		issues: []*types.Issue{
+			{
+				ID:        "bd-gate",
+				IssueType: "gate",
+				AwaitType: "gh:run",
+				AwaitID:   "12345",
+			},
+		},
+	}
+
+	store = fakeStore
+	rootCtx = context.Background()
+	jsonOutput = false
+	readonlyMode = false
+	actor = "test-actor"
+
+	if err := gateCheckCmd.Flags().Set("type", "gh:run"); err != nil {
+		t.Fatalf("set type flag: %v", err)
+	}
+	if err := gateCheckCmd.Flags().Set("dry-run", "false"); err != nil {
+		t.Fatalf("set dry-run flag: %v", err)
+	}
+	if err := gateCheckCmd.Flags().Set("escalate", "false"); err != nil {
+		t.Fatalf("set escalate flag: %v", err)
+	}
+	if err := gateCheckCmd.Flags().Set("limit", "100"); err != nil {
+		t.Fatalf("set limit flag: %v", err)
+	}
+
+	firstOutput := captureGateStdout(t, func() {
+		gateCheckCmd.Run(gateCheckCmd, nil)
+	})
+	if len(fakeStore.closeCalls) != 0 {
+		t.Fatalf("CloseIssue call count after pending run = %d, want 0", len(fakeStore.closeCalls))
+	}
+	if !gateTestContains(firstOutput, "pending - workflow 'release' is in_progress") {
+		t.Fatalf("pending output %q missing in-progress status", firstOutput)
+	}
+	if !gateTestContains(firstOutput, "Checked 1 gates: 0 resolved, 0 escalated, 0 errors") {
+		t.Fatalf("pending summary output missing expected counts: %q", firstOutput)
+	}
+
+	secondOutput := captureGateStdout(t, func() {
+		gateCheckCmd.Run(gateCheckCmd, nil)
+	})
+	if len(fakeStore.closeCalls) != 1 {
+		t.Fatalf("CloseIssue call count after success run = %d, want 1", len(fakeStore.closeCalls))
+	}
+	if !gateTestContains(secondOutput, "resolved - workflow 'release' succeeded") {
+		t.Fatalf("success output %q missing resolution message", secondOutput)
+	}
+	if !gateTestContains(secondOutput, "Checked 1 gates: 1 resolved, 0 escalated, 0 errors") {
+		t.Fatalf("success summary output missing expected counts: %q", secondOutput)
+	}
+}
+
 func TestWorkflowNameMatches(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -716,6 +796,44 @@ func installFakeGHScript(t *testing.T, stdout string) {
 	}
 
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installSequentialFakeGHRunScript(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "gh-run-state")
+	scriptPath := filepath.Join(dir, "gh")
+	script := `#!/bin/sh
+set -eu
+if [ "$1" != "run" ] || [ "$2" != "view" ]; then
+  echo "unexpected gh invocation: $*" >&2
+  exit 9
+fi
+count=0
+if [ -f "$GH_RUN_STATE" ]; then
+  count=$(cat "$GH_RUN_STATE")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$GH_RUN_STATE"
+case "$count" in
+  1)
+    printf '{"status":"in_progress","conclusion":"","name":"release"}'
+    ;;
+  *)
+    printf '{"status":"completed","conclusion":"success","name":"release"}'
+    ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	if err := os.Chmod(scriptPath, 0o755); err != nil {
+		t.Fatalf("chmod fake gh: %v", err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GH_RUN_STATE", statePath)
 }
 
 // gateTestContainsIgnoreCase checks if haystack contains needle (case-insensitive)
