@@ -156,7 +156,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: matrix.coverage && !cancelled()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         continue-on-error: true
         with:
           files: coverage.out
@@ -165,7 +165,7 @@ jobs:
 
       - name: Upload test results to Codecov
         if: matrix.coverage && !cancelled()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         continue-on-error: true
         with:
           files: junit.xml
