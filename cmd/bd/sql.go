@@ -41,9 +41,6 @@ WARNING: Direct database access bypasses the storage layer. Use with caution.`,
 			}
 		}()
 
-		if !usesSQLServer() {
-			return HandleError("'bd sql' is not yet supported in embedded mode")
-		}
 		query := args[0]
 		csvOutput, _ := cmd.Flags().GetBool("csv")
 
