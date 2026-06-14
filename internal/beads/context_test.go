@@ -142,6 +142,42 @@ func TestGetRepoContextForWorkspace_NonGitDirectory(t *testing.T) {
 	}
 }
 
+// TestGetRepoContextForWorkspace_NonGitDirectoryWithBeads verifies that a
+// workspace-local .beads directory is enough for context diagnostics. Commands
+// such as `bd context` should not require git just to report backend identity.
+func TestGetRepoContextForWorkspace_NonGitDirectoryWithBeads(t *testing.T) {
+	tmpDir := t.TempDir()
+	beadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(beadsDir, 0750); err != nil {
+		t.Fatalf("failed to create .beads dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{"backend":"doltlite"}`), 0644); err != nil {
+		t.Fatalf("failed to create metadata.json: %v", err)
+	}
+
+	t.Cleanup(func() {
+		ResetCaches()
+		git.ResetCaches()
+	})
+
+	rc, err := GetRepoContextForWorkspace(tmpDir)
+	if err != nil {
+		t.Fatalf("GetRepoContextForWorkspace failed: %v", err)
+	}
+	if rc.RepoRoot != tmpDir {
+		t.Errorf("RepoRoot mismatch: expected %s, got %s", tmpDir, rc.RepoRoot)
+	}
+	if rc.BeadsDir != beadsDir {
+		t.Errorf("BeadsDir mismatch: expected %s, got %s", beadsDir, rc.BeadsDir)
+	}
+	if rc.CWDRepoRoot != "" {
+		t.Errorf("CWDRepoRoot should be empty outside git, got %q", rc.CWDRepoRoot)
+	}
+	if rc.IsWorktree {
+		t.Error("IsWorktree should be false outside git")
+	}
+}
+
 // TestGetRepoContextForWorkspace_MissingBeadsDir tests error when .beads doesn't exist
 func TestGetRepoContextForWorkspace_MissingBeadsDir(t *testing.T) {
 	tmpDir := t.TempDir()

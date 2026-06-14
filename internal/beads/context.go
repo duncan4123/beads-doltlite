@@ -129,11 +129,12 @@ func buildRepoContext() (*RepoContext, error) {
 		// Beads dir is in a different repo - use that repo's root
 		repoRoot = repoRootForBeadsDir(beadsDir)
 	} else {
-		// Normal case - find repo root via git
-		var err error
-		repoRoot, err = git.GetMainRepoRoot()
-		if err != nil {
-			return nil, fmt.Errorf("cannot determine repository root: %w", err)
+		// Normal case - prefer the VCS root, but keep diagnostics usable in
+		// non-git workspaces that already contain a .beads directory.
+		if root, err := git.GetMainRepoRoot(); err == nil && root != "" {
+			repoRoot = root
+		} else {
+			repoRoot = filepath.Dir(beadsDir)
 		}
 	}
 
@@ -471,7 +472,7 @@ func buildRepoContextForWorkspace(workspacePath string) (*RepoContext, error) {
 		isWorktree = false
 		repoRoot = git.GetRepoRoot()
 		if repoRoot == "" {
-			return nil, fmt.Errorf("workspace %s is not in a git repository", workspacePath)
+			repoRoot = workspacePath
 		}
 	}
 
