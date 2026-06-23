@@ -38,7 +38,7 @@ func (s *DoltliteStore) withDBConn(ctx context.Context, fn func(db versioncontro
 
 func (s *DoltliteStore) withDBWrite(ctx context.Context, fn func(db versioncontrolops.DBConn) error) error {
 	return s.withExclusiveLock(ctx, func() error {
-		return s.withRetry(ctx, func() error {
+		return s.withRetryRefreshingDB(ctx, func() error {
 			return s.withDBConn(ctx, fn)
 		})
 	})
@@ -46,6 +46,77 @@ func (s *DoltliteStore) withDBWrite(ctx context.Context, fn func(db versioncontr
 
 // commitAuthor returns the author string for native doltlite commits.
 const commitAuthor = commitName + " <" + commitEmail + ">"
+
+func commitNative(ctx context.Context, db versioncontrolops.DBConn, message string, includeConfig bool) error {
+	if message == "" {
+		message = "doltlite: snapshot"
+	}
+
+	tables, err := pendingTablesDoltlite(ctx, db, includeConfig)
+	if err != nil {
+		return err
+	}
+	if len(tables) == 0 {
+		return nil
+	}
+
+	for _, table := range tables {
+		if _, err := db.ExecContext(ctx, "SELECT dolt_add(?)", table); err != nil {
+			return fmt.Errorf("doltlite add %s: %w", table, err)
+		}
+	}
+
+	_, err = db.ExecContext(ctx, "SELECT dolt_commit('-m', ?, '--author', ?)", message, commitAuthor)
+	if err != nil && !issueops.IsNothingToCommitError(err) {
+		return fmt.Errorf("doltlite commit: %w", err)
+	}
+	return nil
+}
+
+func pendingTablesDoltlite(ctx context.Context, db issueops.SQLQuerier, includeConfig bool) ([]string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT table_name FROM dolt_status ORDER BY table_name")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query status: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return nil, fmt.Errorf("failed to scan status: %w", err)
+		}
+		if !includeConfig && table == "config" {
+			continue
+		}
+		if isDoltliteRuntimeTable(table) {
+			continue
+		}
+		tables = append(tables, table)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate status: %w", err)
+	}
+	return tables, nil
+}
+
+func hasPendingChangesDoltlite(ctx context.Context, db issueops.SQLQuerier) (bool, error) {
+	tables, err := pendingTablesDoltlite(ctx, db, true)
+	if err != nil {
+		return false, err
+	}
+	return len(tables) > 0, nil
+}
+
+func isDoltliteRuntimeTable(table string) bool {
+	switch table {
+	case "wisps", "wisp_labels", "wisp_dependencies", "wisp_events", "wisp_comments",
+		"wisp_child_counters", "repo_mtimes", "local_metadata":
+		return true
+	default:
+		return false
+	}
+}
 
 func commitAllNative(ctx context.Context, db versioncontrolops.DBConn, message string) error {
 	if message == "" {
@@ -60,13 +131,15 @@ func commitAllNative(ctx context.Context, db versioncontrolops.DBConn, message s
 
 func (s *DoltliteStore) Commit(ctx context.Context, message string) error {
 	return s.withDBWrite(ctx, func(db versioncontrolops.DBConn) error {
-		return commitAllNative(ctx, db, message)
+		return commitNative(ctx, db, message, false)
 	})
 }
 
 // CommitWithConfig commits all working set changes including config.
 func (s *DoltliteStore) CommitWithConfig(ctx context.Context, message string) error {
-	return s.Commit(ctx, message)
+	return s.withDBWrite(ctx, func(db versioncontrolops.DBConn) error {
+		return commitAllNative(ctx, db, message)
+	})
 }
 
 func (s *DoltliteStore) AddRemote(ctx context.Context, name, url string) error {
