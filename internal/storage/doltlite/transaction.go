@@ -29,7 +29,9 @@ func (s *DoltliteStore) RunInTransaction(ctx context.Context, commitMsg string, 
 
 	// Create a Dolt version commit from the working set changes.
 	if commitMsg != "" && len(tracker.DirtyTables()) > 0 {
-		return s.Commit(ctx, commitMsg)
+		if err := s.Commit(ctx, commitMsg); err != nil {
+			return storage.NewPostTransactionCommitError(commitMsg, err)
+		}
 	}
 	return nil
 }
@@ -158,7 +160,7 @@ func (t *embeddedTransaction) SetConfig(ctx context.Context, key, value string) 
 	if err := issueops.SetConfigInTx(ctx, t.tx, key, value); err != nil {
 		return err
 	}
-	// Sync normalized tables when config keys change
+	// Sync normalized tables when config keys change.
 	switch key {
 	case "status.custom":
 		t.dirty.MarkDirty("custom_statuses")
@@ -204,7 +206,15 @@ func (t *embeddedTransaction) ImportIssueComment(ctx context.Context, issueID, a
 }
 
 func (t *embeddedTransaction) GetIssueComments(ctx context.Context, issueID string) ([]*types.Comment, error) {
-	return nil, fmt.Errorf("embeddedTransaction: GetIssueComments not implemented")
+	return issueops.GetIssueCommentsInTx(ctx, t.tx, issueID)
+}
+
+func (t *embeddedTransaction) GetDependenciesWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error) {
+	return issueops.GetDependenciesWithMetadataInTx(ctx, t.tx, issueID)
+}
+
+func (t *embeddedTransaction) GetDependentsWithMetadata(ctx context.Context, issueID string) ([]*types.IssueWithDependencyMetadata, error) {
+	return issueops.GetDependentsWithMetadataInTx(ctx, t.tx, issueID)
 }
 
 func (t *embeddedTransaction) CreateIssueImport(ctx context.Context, issue *types.Issue, actor string, skipPrefixValidation bool) error {
