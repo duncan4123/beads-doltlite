@@ -13,21 +13,50 @@ type SQLQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// HasPendingChanges checks whether there are any committable changes in the
-// Dolt working set, excluding tables matched by dolt_ignore.
-func HasPendingChanges(ctx context.Context, db SQLQuerier) (bool, error) {
-	var count int
-	err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM dolt_status s
+// PendingTables returns committable dirty tables from dolt_status, excluding
+// tables matched by dolt_ignore. When includeConfig is false, config changes
+// are also skipped to match DoltStore.Commit's normal auto-commit policy.
+func PendingTables(ctx context.Context, db SQLQuerier, includeConfig bool) ([]string, error) {
+	query := `
+		SELECT table_name FROM dolt_status s
 		WHERE NOT EXISTS (
 			SELECT 1 FROM dolt_ignore di
 			WHERE di.ignored = 1
 			AND s.table_name LIKE di.pattern
-		)`).Scan(&count)
-	if err != nil {
-		return false, fmt.Errorf("failed to check status: %w", err)
+		)`
+	if !includeConfig {
+		query += "\n\t\tAND s.table_name != 'config'"
 	}
-	return count > 0, nil
+	query += "\n\t\tORDER BY table_name"
+
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query status: %w", err)
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return nil, fmt.Errorf("failed to scan status: %w", err)
+		}
+		tables = append(tables, table)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate status: %w", err)
+	}
+	return tables, nil
+}
+
+// HasPendingChanges checks whether there are any committable changes in the
+// Dolt working set, excluding tables matched by dolt_ignore.
+func HasPendingChanges(ctx context.Context, db SQLQuerier) (bool, error) {
+	tables, err := PendingTables(ctx, db, true)
+	if err != nil {
+		return false, err
+	}
+	return len(tables) > 0, nil
 }
 
 // BuildBatchCommitMessage generates a descriptive commit message summarizing

@@ -262,7 +262,7 @@ func (s *DoltliteStore) withRootConnOnce(ctx context.Context, commit bool, fn fu
 func (s *DoltliteStore) withConn(ctx context.Context, commit bool, fn func(tx *sql.Tx) error) (err error) {
 	if commit {
 		return s.withExclusiveLock(ctx, func() error {
-			return s.withRetry(ctx, func() error {
+			return s.withRetryRefreshingDB(ctx, func() error {
 				return s.withConnOnce(ctx, commit, fn)
 			})
 		})
@@ -309,6 +309,14 @@ func (s *DoltliteStore) withConnOnce(ctx context.Context, commit bool, fn func(t
 }
 
 func (s *DoltliteStore) withRetry(ctx context.Context, fn func() error) error {
+	return s.withRetryAfter(ctx, fn, nil)
+}
+
+func (s *DoltliteStore) withRetryRefreshingDB(ctx context.Context, fn func() error) error {
+	return s.withRetryAfter(ctx, fn, s.resetPersistentDB)
+}
+
+func (s *DoltliteStore) withRetryAfter(ctx context.Context, fn func() error, afterRetryable func()) error {
 	const maxAttempts = 5
 	var err error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
@@ -318,6 +326,9 @@ func (s *DoltliteStore) withRetry(ctx context.Context, fn func() error) error {
 		if !isRetryableConcurrencyError(err) {
 			return err
 		}
+		if afterRetryable != nil {
+			afterRetryable()
+		}
 		select {
 		case <-ctx.Done():
 			return errors.Join(err, ctx.Err())
@@ -325,6 +336,17 @@ func (s *DoltliteStore) withRetry(ctx context.Context, fn func() error) error {
 		}
 	}
 	return err
+}
+
+func (s *DoltliteStore) resetPersistentDB() {
+	s.dbMu.Lock()
+	cleanup := s.dbCleanup
+	s.db = nil
+	s.dbCleanup = nil
+	s.dbMu.Unlock()
+	if cleanup != nil {
+		_ = cleanup()
+	}
 }
 
 func (s *DoltliteStore) withExclusiveLock(ctx context.Context, fn func() error) error {
@@ -758,7 +780,7 @@ func (s *DoltliteStore) CommitPending(ctx context.Context, actor string) (bool, 
 		return false, nil
 	}
 
-	if err := s.Commit(ctx, msg); err != nil {
+	if err := s.CommitWithConfig(ctx, msg); err != nil {
 		if issueops.IsNothingToCommitError(err) {
 			return false, nil
 		}
