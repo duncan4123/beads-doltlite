@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/storage"
@@ -639,6 +640,12 @@ func executeGraphApply(ctx context.Context, plan *GraphApplyPlan, opts GraphAppl
 
 		return nil
 	}); err != nil {
+		if result, recovered, recoverErr := recoverGraphApplyResultAfterPostCommitError(plan, keyToID, err); recovered {
+			if recoverErr != nil {
+				return nil, recoverErr
+			}
+			return result, nil
+		}
 		return nil, err
 	}
 
@@ -856,6 +863,54 @@ func graphApplyDepPairIDs(pair string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+func recoverGraphApplyResultAfterPostCommitError(plan *GraphApplyPlan, keyToID map[string]string, err error) (*GraphApplyResult, bool, error) {
+	postCommitErr, ok := storage.AsPostTransactionCommitError(err)
+	if !ok || !isRetryableGraphPostCommitError(postCommitErr.Unwrap()) {
+		return nil, false, nil
+	}
+
+	result := &GraphApplyResult{IDs: keyToID}
+	if validateErr := validateGraphApplyResultIDs(plan, result); validateErr != nil {
+		return nil, true, fmt.Errorf("graph apply SQL rows were committed, but result recovery failed after post-commit error: %w; original error: %v", validateErr, err)
+	}
+	return result, true, nil
+}
+
+func isRetryableGraphPostCommitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"database is locked",
+		"database is busy",
+		"database table is locked",
+		"sqlite_busy",
+		"another connection committed",
+		"please retry your transaction",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateGraphApplyResultIDs(plan *GraphApplyPlan, result *GraphApplyResult) error {
+	if result == nil {
+		return fmt.Errorf("missing result")
+	}
+	for _, node := range plan.Nodes {
+		if result.IDs[node.Key] == "" {
+			return fmt.Errorf("missing ID for node %q", node.Key)
+		}
+	}
+	if len(result.IDs) != len(plan.Nodes) {
+		return fmt.Errorf("result has %d IDs, want %d", len(result.IDs), len(plan.Nodes))
+	}
+	return nil
 }
 
 func resolveEdgeRef(key, id string, keyToID map[string]string) string {

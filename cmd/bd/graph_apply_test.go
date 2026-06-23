@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/steveyegge/beads/internal/storage"
 )
 
 func TestValidateGraphApplyPlanAcceptsCustomTypes(t *testing.T) {
@@ -411,5 +414,102 @@ func TestGraphApplyParentDepPairs(t *testing.T) {
 	}
 	if pairs[graphApplyDepPairKey("bd-root", "bd-child")] {
 		t.Fatal("unexpected reverse parent dep pair")
+	}
+}
+
+func TestGraphApplyRecoversIDsAfterDoltlitePostCommitDependencyLock(t *testing.T) {
+	plan := &GraphApplyPlan{
+		Nodes: []GraphApplyNode{
+			{Key: "root", Title: "Root"},
+			{Key: "child", Title: "Child"},
+		},
+		Edges: []GraphApplyEdge{
+			{FromKey: "child", ToKey: "root", Type: "blocks"},
+		},
+	}
+	keyToID := map[string]string{
+		"root":  "bd-root",
+		"child": "bd-child",
+	}
+	err := storage.NewPostTransactionCommitError(
+		"bd: graph-apply 2 nodes",
+		errors.New("doltlite add dependencies: database is locked"),
+	)
+
+	got, recovered, recoverErr := recoverGraphApplyResultAfterPostCommitError(plan, keyToID, err)
+	if recoverErr != nil {
+		t.Fatalf("recover error: %v", recoverErr)
+	}
+	if !recovered {
+		t.Fatal("expected recovery for retryable post-commit lock")
+	}
+	if got == nil || got.IDs["root"] != "bd-root" || got.IDs["child"] != "bd-child" {
+		t.Fatalf("recovered result = %#v", got)
+	}
+}
+
+func TestGraphApplyDoesNotRecoverPlainTransactionError(t *testing.T) {
+	plan := &GraphApplyPlan{
+		Nodes: []GraphApplyNode{{Key: "root", Title: "Root"}},
+	}
+	keyToID := map[string]string{"root": "bd-root"}
+
+	got, recovered, recoverErr := recoverGraphApplyResultAfterPostCommitError(
+		plan,
+		keyToID,
+		errors.New("doltlite add dependencies: database is locked"),
+	)
+	if recoverErr != nil {
+		t.Fatalf("recover error: %v", recoverErr)
+	}
+	if recovered {
+		t.Fatalf("unexpected recovery: %#v", got)
+	}
+}
+
+func TestGraphApplyDoesNotRecoverNonRetryablePostCommitError(t *testing.T) {
+	plan := &GraphApplyPlan{
+		Nodes: []GraphApplyNode{{Key: "root", Title: "Root"}},
+	}
+	keyToID := map[string]string{"root": "bd-root"}
+	err := storage.NewPostTransactionCommitError(
+		"bd: graph-apply 1 nodes",
+		errors.New("doltlite add dependencies: permission denied"),
+	)
+
+	got, recovered, recoverErr := recoverGraphApplyResultAfterPostCommitError(plan, keyToID, err)
+	if recoverErr != nil {
+		t.Fatalf("recover error: %v", recoverErr)
+	}
+	if recovered {
+		t.Fatalf("unexpected recovery: %#v", got)
+	}
+}
+
+func TestGraphApplyRejectsIncompleteRecoveredIDs(t *testing.T) {
+	plan := &GraphApplyPlan{
+		Nodes: []GraphApplyNode{
+			{Key: "root", Title: "Root"},
+			{Key: "child", Title: "Child"},
+		},
+	}
+	err := storage.NewPostTransactionCommitError(
+		"bd: graph-apply 2 nodes",
+		errors.New("doltlite add dependencies: database is locked"),
+	)
+
+	got, recovered, recoverErr := recoverGraphApplyResultAfterPostCommitError(
+		plan,
+		map[string]string{"root": "bd-root"},
+		err,
+	)
+	if !recovered {
+		t.Fatal("expected recovery path to be selected")
+	}
+	if got != nil {
+		t.Fatalf("unexpected recovered result: %#v", got)
+	}
+	if recoverErr == nil || !strings.Contains(recoverErr.Error(), `missing ID for node "child"`) {
+		t.Fatalf("recoverErr = %v, want missing child ID", recoverErr)
 	}
 }
