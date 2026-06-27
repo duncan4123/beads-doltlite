@@ -22,7 +22,7 @@ func (s *DoltliteStore) AddDependency(ctx context.Context, dep *types.Dependency
 // RemoveDependency removes a dependency between two issues.
 func (s *DoltliteStore) RemoveDependency(ctx context.Context, issueID, dependsOnID string, actor string) error {
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		return issueops.RemoveDependencyInTx(ctx, tx, issueID, dependsOnID)
+		return issueops.RemoveDependencySQLiteInTx(ctx, tx, issueID, dependsOnID)
 	})
 }
 

@@ -568,7 +568,7 @@ func (s *DoltliteStore) GetIssueByExternalRef(ctx context.Context, externalRef s
 
 func (s *DoltliteStore) DeleteIssue(ctx context.Context, id string) error {
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		return issueops.DeleteIssueInTx(ctx, tx, id)
+		return issueops.DeleteIssueSQLiteInTx(ctx, tx, id)
 	})
 }
 
