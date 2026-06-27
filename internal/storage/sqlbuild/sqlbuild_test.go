@@ -116,6 +116,85 @@ func TestBuildReadyWorkWhereBatchesIDSets(t *testing.T) {
 	}
 }
 
+func TestBuildReadyWorkWhereUsesSQLiteClockDialect(t *testing.T) {
+	t.Parallel()
+
+	where, _, err := BuildReadyWorkWhere(types.WorkFilter{}, IssuesFilterTables, ReadyWorkWhereInputs{
+		Dialect: CountsDialectSQLite,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(where, "UTC_TIMESTAMP()") {
+		t.Fatalf("SQLite ready WHERE must not use UTC_TIMESTAMP(): %s", where)
+	}
+	if !strings.Contains(where, "defer_until <= CURRENT_TIMESTAMP") {
+		t.Fatalf("SQLite ready WHERE missing CURRENT_TIMESTAMP defer predicate: %s", where)
+	}
+}
+
+func TestBuildReadyWorkWhereUsesSQLiteMetadataAndChildIDDialect(t *testing.T) {
+	t.Parallel()
+
+	parentID := "bd-parent"
+	where, _, err := BuildReadyWorkWhere(types.WorkFilter{
+		ParentID:       &parentID,
+		MoleculeID:     "bd-mol",
+		HasMetadataKey: "gc.routed_to",
+		MetadataFields: map[string]string{
+			"gc.routed_to": "beads-doltlite/gc.implementation-reviewer",
+		},
+	}, IssuesFilterTables, ReadyWorkWhereInputs{
+		Dialect: CountsDialectSQLite,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, bad := range []string{"JSON_UNQUOTE", "JSON_EXTRACT", "CONCAT("} {
+		if strings.Contains(where, bad) {
+			t.Fatalf("SQLite ready WHERE must not use %s: %s", bad, where)
+		}
+	}
+	for _, want := range []string{
+		"json_extract(metadata, ?) IS NOT NULL",
+		"json_extract(metadata, ?) = ?",
+		"id LIKE (? || '.%')",
+	} {
+		if !strings.Contains(where, want) {
+			t.Fatalf("SQLite ready WHERE missing %q in %s", want, where)
+		}
+	}
+}
+
+func TestBuildIssueFilterClausesUsesSQLiteMetadataDialect(t *testing.T) {
+	t.Parallel()
+
+	clauses, args, err := BuildIssueFilterClausesDialect("", types.IssueFilter{
+		HasMetadataKey: "gc.routed_to",
+		MetadataFields: map[string]string{
+			"gc.routed_to": "beads-doltlite/gc.implementation-reviewer",
+		},
+	}, IssuesFilterTables, CountsDialectSQLite)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sql := strings.Join(clauses, " AND ")
+	if strings.Contains(sql, "JSON_UNQUOTE") || strings.Contains(sql, "JSON_EXTRACT") {
+		t.Fatalf("SQLite metadata predicates must not use MySQL JSON functions: %s", sql)
+	}
+	for _, want := range []string{
+		"json_extract(metadata, ?) IS NOT NULL",
+		"json_extract(metadata, ?) = ?",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("SQLite metadata predicates missing %q in %s", want, sql)
+		}
+	}
+	if got, want := len(args), 3; got != want {
+		t.Fatalf("args = %d, want %d", got, want)
+	}
+}
+
 func TestSearchCountsSQLShape(t *testing.T) {
 	t.Parallel()
 

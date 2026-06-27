@@ -16,9 +16,19 @@ import (
 // Set filter.SkipWisps=true for callers that never need ephemeral results; this
 // avoids the unconditional full-table wisps scan (Q2 perf opt).
 func SearchIssuesInTx(ctx context.Context, tx DBTX, query string, filter types.IssueFilter) ([]*types.Issue, error) {
+	return searchIssuesInTx(ctx, tx, query, filter, sqlbuild.CountsDialectDolt)
+}
+
+// SearchIssuesSQLiteInTx executes filtered issue search using SQLite-compatible
+// SQL fragments for embedded DoltLite stores.
+func SearchIssuesSQLiteInTx(ctx context.Context, tx DBTX, query string, filter types.IssueFilter) ([]*types.Issue, error) {
+	return searchIssuesInTx(ctx, tx, query, filter, sqlbuild.CountsDialectSQLite)
+}
+
+func searchIssuesInTx(ctx context.Context, tx DBTX, query string, filter types.IssueFilter, dialect sqlbuild.CountsDialect) ([]*types.Issue, error) {
 	// Route ephemeral-only queries to wisps table.
 	if filter.Ephemeral != nil && *filter.Ephemeral {
-		results, err := searchTableInTx(ctx, tx, query, filter, WispsFilterTables)
+		results, err := searchTableInTxDialect(ctx, tx, query, filter, WispsFilterTables, dialect)
 		if err != nil && !isTableNotExistError(err) {
 			return nil, fmt.Errorf("search wisps (ephemeral filter): %w", err)
 		}
@@ -28,7 +38,7 @@ func SearchIssuesInTx(ctx context.Context, tx DBTX, query string, filter types.I
 		// Fall through: wisps table doesn't exist or returned no results
 	}
 
-	results, err := searchTableInTx(ctx, tx, query, filter, IssuesFilterTables)
+	results, err := searchTableInTxDialect(ctx, tx, query, filter, IssuesFilterTables, dialect)
 	if err != nil {
 		return nil, fmt.Errorf("search issues: %w", err)
 	}
@@ -53,7 +63,7 @@ func SearchIssuesInTx(ctx context.Context, tx DBTX, query string, filter types.I
 		if empty {
 			return results, nil
 		}
-		wispResults, wispErr := searchTableInTx(ctx, tx, query, filter, WispsFilterTables)
+		wispResults, wispErr := searchTableInTxDialect(ctx, tx, query, filter, WispsFilterTables, dialect)
 		if wispErr != nil && !isTableNotExistError(wispErr) {
 			return nil, fmt.Errorf("search wisps (merge): %w", wispErr)
 		}
@@ -85,8 +95,12 @@ func SearchIssuesInTx(ctx context.Context, tx DBTX, query string, filter types.I
 // Pattern B is equivalent to Pattern A but faster on large corpora where most rows
 // are never needed (mirrors the pattern in scanIssueIDs and GetStaleIssuesInTx).
 func searchTableInTx(ctx context.Context, tx DBTX, query string, filter types.IssueFilter, tables FilterTables) ([]*types.Issue, error) {
+	return searchTableInTxDialect(ctx, tx, query, filter, tables, sqlbuild.CountsDialectDolt)
+}
+
+func searchTableInTxDialect(ctx context.Context, tx DBTX, query string, filter types.IssueFilter, tables FilterTables, dialect sqlbuild.CountsDialect) ([]*types.Issue, error) {
 	plan := sqlbuild.BuildLabelDrivenSearch(filter, tables)
-	whereClauses, args, err := BuildIssueFilterClauses(query, plan.Filter, tables)
+	whereClauses, args, err := BuildIssueFilterClausesDialect(query, plan.Filter, tables, dialect)
 	if err != nil {
 		return nil, err
 	}

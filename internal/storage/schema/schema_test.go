@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -58,6 +59,72 @@ func TestIgnoredPendingMigrationDirtyTablesDetectsWispDependencies(t *testing.T)
 	}
 	if len(touched) != 1 || touched[0] != "wisp_dependencies" {
 		t.Fatalf("touched = %v, want [wisp_dependencies]", touched)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMigrateSQLiteUpToSkipsMySQLOnlyMigration0035(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(mainSource.bootstrapSQL())).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM INFORMATION_SCHEMA\.COLUMNS`).
+		WithArgs("schema_migrations").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT COALESCE\(MAX\(version\), 0\) FROM schema_migrations`).
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(34))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT OR IGNORE INTO schema_migrations (version, content_hash) VALUES (?, ?)")).
+		WithArgs(35, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	applied, err := MigrateSQLiteUpTo(context.Background(), db, 35)
+	if err != nil {
+		t.Fatalf("MigrateSQLiteUpTo: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied = %d, want 1", applied)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestMigrateSQLiteUpToMigration0046IsIdempotent(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec(regexp.QuoteMeta(mainSource.bootstrapSQL())).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM INFORMATION_SCHEMA\.COLUMNS`).
+		WithArgs("schema_migrations").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT COALESCE\(MAX\(version\), 0\) FROM schema_migrations`).
+		WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(45))
+	mock.ExpectQuery(regexp.QuoteMeta("PRAGMA table_info(issues)")).
+		WillReturnRows(sqlmock.NewRows([]string{"cid", "name", "type", "notnull", "dflt_value", "pk"}).
+			AddRow(0, "id", "VARCHAR(255)", 1, nil, 1).
+			AddRow(1, "is_blocked", "TINYINT(1)", 1, "0", 0))
+	mock.ExpectExec(regexp.QuoteMeta("CREATE INDEX IF NOT EXISTS idx_issues_is_blocked ON issues(is_blocked, status)")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT OR IGNORE INTO schema_migrations (version, content_hash) VALUES (?, ?)")).
+		WithArgs(46, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	applied, err := MigrateSQLiteUpTo(context.Background(), db, 46)
+	if err != nil {
+		t.Fatalf("MigrateSQLiteUpTo: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied = %d, want 1", applied)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)

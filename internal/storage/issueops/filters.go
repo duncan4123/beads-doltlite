@@ -23,6 +23,12 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 	return sqlbuild.BuildIssueFilterClauses(query, filter, tables)
 }
 
+// BuildIssueFilterClausesDialect builds WHERE fragments using backend-specific
+// SQL for JSON metadata predicates.
+func BuildIssueFilterClausesDialect(query string, filter types.IssueFilter, tables FilterTables, dialect sqlbuild.CountsDialect) ([]string, []interface{}, error) {
+	return sqlbuild.BuildIssueFilterClausesDialect(query, filter, tables, dialect)
+}
+
 // LooksLikeIssueID returns true if the query string looks like a beads issue ID.
 func LooksLikeIssueID(query string) bool {
 	return sqlbuild.LooksLikeIssueID(query)

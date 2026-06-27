@@ -47,10 +47,16 @@ func MigrateFreshSQLite(ctx context.Context, db DBConn, maxVersion int) (int, er
 		if err != nil {
 			return count, fmt.Errorf("reading migration %s: %w", mf.name, err)
 		}
-		sqlText := sqliteCompatibleMigrationSQL(mf.name, string(data))
-		if strings.TrimSpace(sqlText) != "" {
-			if _, err := db.ExecContext(ctx, sqlText); err != nil {
+		if mf.name == "0046_add_is_blocked.up.sql" {
+			if err := applySQLiteMigration0046(ctx, db); err != nil {
 				return count, fmt.Errorf("migration %s: %w", mf.name, err)
+			}
+		} else {
+			sqlText := sqliteCompatibleMigrationSQL(mf.name, string(data))
+			if strings.TrimSpace(sqlText) != "" {
+				if _, err := db.ExecContext(ctx, sqlText); err != nil {
+					return count, fmt.Errorf("migration %s: %w", mf.name, err)
+				}
 			}
 		}
 		sum := sha256.Sum256(data)
@@ -60,6 +66,102 @@ func MigrateFreshSQLite(ctx context.Context, db DBConn, maxVersion int) (int, er
 		count++
 	}
 	return count, nil
+}
+
+// MigrateSQLiteUpTo applies pending main schema migrations to an existing
+// SQLite-compatible database. It records the original migration hashes while
+// executing the SQLite-compatible migration body, which may intentionally be a
+// no-op for Dolt/MySQL-only migrations.
+func MigrateSQLiteUpTo(ctx context.Context, db DBConn, maxVersion int) (int, error) {
+	if _, err := db.ExecContext(ctx, mainSource.bootstrapSQL()); err != nil {
+		return 0, fmt.Errorf("creating %s: %w", mainSource.cursorTable, err)
+	}
+	if _, err := mainSource.ensureContentHashColumn(ctx, db); err != nil {
+		return 0, err
+	}
+
+	target := mainSource.latest()
+	if maxVersion > 0 && maxVersion < target {
+		target = maxVersion
+	}
+
+	current, err := mainSource.currentVersion(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+	if current >= target {
+		return 0, nil
+	}
+
+	count := 0
+	for _, mf := range mainSource.list() {
+		if mf.version <= current || mf.version > target {
+			continue
+		}
+		data, err := mainSource.files.ReadFile(mainSource.dir + "/" + mf.name)
+		if err != nil {
+			return count, fmt.Errorf("reading migration %s: %w", mf.name, err)
+		}
+		if mf.name == "0046_add_is_blocked.up.sql" {
+			if err := applySQLiteMigration0046(ctx, db); err != nil {
+				return count, fmt.Errorf("migration %s: %w", mf.name, err)
+			}
+		} else {
+			sqlText := sqliteCompatibleMigrationSQL(mf.name, string(data))
+			if strings.TrimSpace(sqlText) != "" {
+				if _, err := db.ExecContext(ctx, sqlText); err != nil {
+					return count, fmt.Errorf("migration %s: %w", mf.name, err)
+				}
+			}
+		}
+		sum := sha256.Sum256(data)
+		if _, err := db.ExecContext(ctx, "INSERT OR IGNORE INTO "+mainSource.cursorTable+" (version, content_hash) VALUES (?, ?)", mf.version, hex.EncodeToString(sum[:])); err != nil {
+			return count, fmt.Errorf("recording %s in %s: %w", mf.name, mainSource.cursorTable, err)
+		}
+		count++
+	}
+	return count, nil
+}
+
+func applySQLiteMigration0046(ctx context.Context, db DBConn) error {
+	hasIsBlocked, err := sqliteColumnExists(ctx, db, "issues", "is_blocked")
+	if err != nil {
+		return fmt.Errorf("checking issues.is_blocked: %w", err)
+	}
+	if !hasIsBlocked {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE issues ADD COLUMN is_blocked TINYINT(1) NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_issues_is_blocked ON issues(is_blocked, status)"); err != nil {
+		return fmt.Errorf("creating idx_issues_is_blocked: %w", err)
+	}
+	return nil
+}
+
+func sqliteColumnExists(ctx context.Context, db DBConn, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func sqliteCompatibleMigrationSQL(name, sqlText string) string {

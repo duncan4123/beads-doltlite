@@ -105,7 +105,7 @@ func searchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, f
 }
 
 func runFilterSearchQueryInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables, includeWispReverseDeps bool, dialect sqlbuild.CountsDialect) ([]*types.IssueWithCounts, error) {
-	whereClauses, args, err := BuildIssueFilterClauses(query, filter, tables)
+	whereClauses, args, err := BuildIssueFilterClausesDialect(query, filter, tables, dialect)
 	if err != nil {
 		return nil, err
 	}

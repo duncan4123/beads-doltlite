@@ -28,7 +28,7 @@ func (s *DoltliteStore) ClaimReadyIssue(ctx context.Context, filter types.WorkFi
 	var claimed *types.Issue
 	err := s.withConn(ctx, true, func(tx *sql.Tx) error {
 		var err error
-		claimed, err = issueops.ClaimReadyIssueInTx(ctx, tx, filter, actor)
+		claimed, err = issueops.ClaimReadyIssueSQLiteInTx(ctx, tx, filter, actor)
 		return err
 	})
 	return claimed, err
@@ -104,7 +104,7 @@ func (s *DoltliteStore) UpdateIssueType(ctx context.Context, id string, issueTyp
 // Delegates SQL work to issueops; EmbeddedDolt auto-commits the transaction.
 func (s *DoltliteStore) CloseIssue(ctx context.Context, id string, reason string, actor string, session string) error {
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		_, err := issueops.CloseIssueInTx(ctx, tx, id, reason, actor, session)
+		_, err := issueops.CloseIssueSQLiteInTx(ctx, tx, id, reason, actor, session)
 		return err
 	})
 }

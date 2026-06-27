@@ -93,7 +93,7 @@ func (t *embeddedTransaction) UpdateIssue(ctx context.Context, id string, update
 func (t *embeddedTransaction) CloseIssue(ctx context.Context, id string, reason string, actor string, session string) error {
 	t.dirty.MarkDirty("issues")
 	t.dirty.MarkDirty("events")
-	_, err := issueops.CloseIssueInTx(ctx, t.tx, id, reason, actor, session)
+	_, err := issueops.CloseIssueSQLiteInTx(ctx, t.tx, id, reason, actor, session)
 	return err
 }
 

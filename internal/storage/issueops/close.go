@@ -19,15 +19,21 @@ type CloseResult struct {
 // and recording the close event. Routes to the correct table (issues/wisps)
 // automatically. The caller is responsible for Dolt versioning if needed.
 func CloseIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string) (*CloseResult, error) {
-	return closeIssueInTx(ctx, tx, id, reason, actor, session, true)
+	return closeIssueInTx(ctx, tx, id, reason, actor, session, true, false)
+}
+
+// CloseIssueSQLiteInTx closes an issue using SQLite-compatible derived-state
+// recompute SQL for embedded DoltLite stores.
+func CloseIssueSQLiteInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string) (*CloseResult, error) {
+	return closeIssueInTx(ctx, tx, id, reason, actor, session, true, true)
 }
 
 func CloseIssueWithoutEventInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string) (*CloseResult, error) {
-	return closeIssueInTx(ctx, tx, id, reason, actor, session, false)
+	return closeIssueInTx(ctx, tx, id, reason, actor, session, false, false)
 }
 
 //nolint:gosec // G201: table names come from WispTableRouting (hardcoded constants)
-func closeIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string, recordEvent bool) (*CloseResult, error) {
+func closeIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string, recordEvent bool, sqlite bool) (*CloseResult, error) {
 	isWisp := IsActiveWispInTx(ctx, tx, id)
 	issueTable, _, eventTable, _ := WispTableRouting(isWisp)
 
@@ -85,8 +91,14 @@ func closeIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, sess
 		}
 	}
 
-	if err := RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps); err != nil {
-		return nil, fmt.Errorf("recompute is_blocked after close for %s: %w", id, err)
+	var recomputeErr error
+	if sqlite {
+		recomputeErr = RecomputeIsBlockedSQLiteInTx(ctx, tx, affectedIssues, affectedWisps)
+	} else {
+		recomputeErr = RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps)
+	}
+	if recomputeErr != nil {
+		return nil, fmt.Errorf("recompute is_blocked after close for %s: %w", id, recomputeErr)
 	}
 
 	return &CloseResult{IsWisp: isWisp}, nil

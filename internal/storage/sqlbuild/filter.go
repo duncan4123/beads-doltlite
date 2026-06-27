@@ -14,6 +14,12 @@ import (
 // string and IssueFilter. The tables parameter controls which table names are
 // referenced in subqueries (issues vs wisps).
 func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables FilterTables) ([]string, []any, error) {
+	return BuildIssueFilterClausesDialect(query, filter, tables, CountsDialectDolt)
+}
+
+// BuildIssueFilterClausesDialect builds WHERE clause fragments and args using
+// backend-specific SQL for JSON metadata predicates.
+func BuildIssueFilterClausesDialect(query string, filter types.IssueFilter, tables FilterTables, dialect CountsDialect) ([]string, []any, error) {
 	var whereClauses []string
 	var args []any
 
@@ -121,7 +127,7 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 
 	if filter.ParentID != nil {
 		parentID := *filter.ParentID
-		whereClauses = append(whereClauses, fmt.Sprintf("(id IN (SELECT issue_id FROM %s WHERE type = 'parent-child' AND %s = ?) OR (id LIKE CONCAT(?, '.%%') AND id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child')))", tables.Dependencies, DepTargetExpr, tables.Dependencies))
+		whereClauses = append(whereClauses, fmt.Sprintf("(id IN (SELECT issue_id FROM %s WHERE type = 'parent-child' AND %s = ?) OR (%s AND id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child')))", tables.Dependencies, DepTargetExpr, ReadyWorkChildIDLikeExpr(dialect), tables.Dependencies))
 		args = append(args, parentID, parentID)
 	}
 	if filter.NoParent {
@@ -229,7 +235,7 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 	}
 
 	var err error
-	whereClauses, args, err = AppendMetadataClauses(whereClauses, args, filter.HasMetadataKey, filter.MetadataFields)
+	whereClauses, args, err = AppendMetadataClausesDialect(whereClauses, args, filter.HasMetadataKey, filter.MetadataFields, dialect)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -240,11 +246,24 @@ func BuildIssueFilterClauses(query string, filter types.IssueFilter, tables Filt
 // AppendMetadataClauses appends JSON metadata predicates (has-key and exact
 // field matches, keys in sorted order) to an existing clause/arg list.
 func AppendMetadataClauses(where []string, args []any, hasKey string, fields map[string]string) ([]string, []any, error) {
+	return AppendMetadataClausesDialect(where, args, hasKey, fields, CountsDialectDolt)
+}
+
+// AppendMetadataClausesDialect appends backend-specific JSON metadata
+// predicates (has-key and exact field matches, keys in sorted order) to an
+// existing clause/arg list.
+func AppendMetadataClausesDialect(where []string, args []any, hasKey string, fields map[string]string, dialect CountsDialect) ([]string, []any, error) {
+	jsonExtract := "JSON_EXTRACT"
+	exactMatch := "JSON_UNQUOTE(JSON_EXTRACT(metadata, ?)) = ?"
+	if dialect == CountsDialectSQLite {
+		jsonExtract = "json_extract"
+		exactMatch = "json_extract(metadata, ?) = ?"
+	}
 	if hasKey != "" {
 		if err := storage.ValidateMetadataKey(hasKey); err != nil {
 			return nil, nil, err
 		}
-		where = append(where, "JSON_EXTRACT(metadata, ?) IS NOT NULL")
+		where = append(where, fmt.Sprintf("%s(metadata, ?) IS NOT NULL", jsonExtract))
 		args = append(args, storage.JSONMetadataPath(hasKey))
 	}
 	if len(fields) > 0 {
@@ -257,7 +276,7 @@ func AppendMetadataClauses(where []string, args []any, hasKey string, fields map
 			if err := storage.ValidateMetadataKey(k); err != nil {
 				return nil, nil, err
 			}
-			where = append(where, "JSON_UNQUOTE(JSON_EXTRACT(metadata, ?)) = ?")
+			where = append(where, exactMatch)
 			args = append(args, storage.JSONMetadataPath(k), fields[k])
 		}
 	}
