@@ -9,7 +9,7 @@ SHELL := $(subst cmd,bin,$(subst git.exe,bash.exe,$(GIT_BASH)))
 endif
 endif
 
-.PHONY: all build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration bench bench-quick clean clean-test-tmp install install-force help check-up-to-date fmt fmt-check check-testing-short
+.PHONY: all build test test-doltlite test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration bench bench-quick clean clean-test-tmp install install-force help check-up-to-date fmt fmt-check check-testing-short
 .PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-package-mcp ci-package-npm ci-website
 
 # Default target
@@ -48,6 +48,8 @@ endif
 # opt-in ICU regex path).
 BUILD_TAGS := gms_pure_go
 REGRESSION_TIMEOUT ?= 20m
+DOLTLITE_LIB ?= $(abspath ../doltlite-work/build)
+DOLTLITE_TEST_FLAGS ?=
 
 # Build the bd binary
 build:
@@ -66,6 +68,18 @@ endif
 test:
 	@echo "Running tests..."
 	@TEST_COVER=1 ./scripts/test.sh
+
+# Run the embedded DoltLite package tests against a libdoltlite-linked sqlite3
+# driver. Plain `go test ./internal/storage/doltlite` skips when these native
+# SQL functions are not linked.
+test-doltlite:
+	@if [ ! -f "$(DOLTLITE_LIB)/libdoltlite.so" ]; then \
+		echo "ERROR: libdoltlite.so not found at $(DOLTLITE_LIB)"; \
+		echo "Set DOLTLITE_LIB=/path/to/doltlite/build or build DoltLite first."; \
+		exit 1; \
+	fi
+	CGO_LDFLAGS="-L$(DOLTLITE_LIB) -Wl,-rpath,$(DOLTLITE_LIB) -ldoltlite" \
+		go test -tags "libsqlite3 $(BUILD_TAGS)" ./internal/storage/doltlite $(DOLTLITE_TEST_FLAGS)
 
 # Run the opt-in ICU regex path test suite (no skip list).
 # This is a local developer workflow for intentionally exercising the leftover
