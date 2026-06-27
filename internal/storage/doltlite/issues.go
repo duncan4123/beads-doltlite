@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/issueops"
@@ -17,9 +18,20 @@ import (
 // Delegates SQL work to issueops; EmbeddedDolt auto-commits the transaction.
 func (s *DoltliteStore) ClaimIssue(ctx context.Context, id string, actor string) error {
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		_, err := issueops.ClaimIssueInTxWithDialect(ctx, tx, id, actor, issueops.SQLDialectSQLite)
+		_, err := issueops.ClaimIssueInTx(ctx, tx, id, actor)
 		return err
 	})
+}
+
+// ClaimReadyIssue atomically claims the first ready issue matching filter.
+func (s *DoltliteStore) ClaimReadyIssue(ctx context.Context, filter types.WorkFilter, actor string) (*types.Issue, error) {
+	var claimed *types.Issue
+	err := s.withConn(ctx, true, func(tx *sql.Tx) error {
+		var err error
+		claimed, err = issueops.ClaimReadyIssueInTx(ctx, tx, filter, actor)
+		return err
+	})
+	return claimed, err
 }
 
 // UpdateIssue updates fields on an issue.
@@ -37,9 +49,30 @@ func (s *DoltliteStore) UpdateIssue(ctx context.Context, id string, updates map[
 	}
 
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		_, err := issueops.UpdateIssueInTxWithDialect(ctx, tx, id, updates, actor, issueops.SQLDialectSQLite)
+		_, err := issueops.UpdateIssueInTx(ctx, tx, id, updates, actor)
 		return err
 	})
+}
+
+// HeartbeatIssue refreshes the lease on an issue actor holds in_progress.
+// Delegates SQL work to issueops; EmbeddedDolt auto-commits the transaction.
+func (s *DoltliteStore) HeartbeatIssue(ctx context.Context, id, actor string) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.HeartbeatIssueInTx(ctx, tx, id, actor)
+	})
+}
+
+// ReclaimExpiredLeases reverts in_progress issues whose lease expired more than
+// olderThan ago back to ready, recovering work stranded by dead workers.
+func (s *DoltliteStore) ReclaimExpiredLeases(ctx context.Context, olderThan time.Duration, actor string) ([]types.ReclaimedLease, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	var reclaimed []types.ReclaimedLease
+	err := s.withConn(ctx, true, func(tx *sql.Tx) error {
+		var err error
+		reclaimed, err = issueops.ReclaimExpiredLeasesInTx(ctx, tx, cutoff, actor)
+		return err
+	})
+	return reclaimed, err
 }
 
 // ReopenIssue reopens a closed issue, setting status to open and clearing
@@ -71,7 +104,7 @@ func (s *DoltliteStore) UpdateIssueType(ctx context.Context, id string, issueTyp
 // Delegates SQL work to issueops; EmbeddedDolt auto-commits the transaction.
 func (s *DoltliteStore) CloseIssue(ctx context.Context, id string, reason string, actor string, session string) error {
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		_, err := issueops.CloseIssueInTxWithDialect(ctx, tx, id, reason, actor, session, issueops.SQLDialectSQLite)
+		_, err := issueops.CloseIssueInTx(ctx, tx, id, reason, actor, session)
 		return err
 	})
 }

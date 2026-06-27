@@ -158,7 +158,7 @@ func (s *DoltliteStore) openPersistentDB(ctx context.Context) error {
 	var cleanup func() error
 	if err := s.withRetry(ctx, func() error {
 		var err error
-		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, s.branch)
+		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, "")
 		return err
 	}); err != nil {
 		return err
@@ -178,7 +178,7 @@ func (s *DoltliteStore) activeDB(ctx context.Context) (*sql.DB, func() error, er
 	var cleanup func() error
 	if err := s.withRetry(ctx, func() error {
 		var err error
-		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, s.branch)
+		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, "")
 		return err
 	}); err != nil {
 		return nil, nil, err
@@ -389,18 +389,27 @@ func (s *DoltliteStore) initSchema(ctx context.Context) error {
 	var cleanup func() error
 	if err := s.withRetry(ctx, func() error {
 		var err error
-		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, s.branch)
+		db, cleanup, err = OpenSQL(ctx, s.dataDir, s.database, "")
 		return err
 	}); err != nil {
 		return fmt.Errorf("doltlite: open for schema init: %w", err)
 	}
 	defer func() { _ = cleanup() }()
 
-	if err := schema.CreateIgnoredTablesSQLite(ctx, db); err != nil {
-		return fmt.Errorf("ensure ignored tables before migration: %w", err)
+	currentVersion, err := schema.CurrentVersion(ctx, db)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			currentVersion = 0
+		} else {
+			return err
+		}
 	}
-
-	applied, err := schema.MigrateUpSQLite(ctx, db)
+	var applied int
+	if currentVersion == 0 {
+		applied, err = schema.MigrateFreshSQLite(ctx, db, schema.LatestVersion())
+	} else {
+		applied, err = schema.MigrateUpTo(ctx, db, schema.LatestVersion())
+	}
 	if err != nil {
 		return err
 	}
@@ -416,8 +425,24 @@ func (s *DoltliteStore) initSchema(ctx context.Context) error {
 // ensureIgnoredTables creates dolt_ignore'd wisp tables if they don't exist.
 // Uses withConn (not withRootConn) because the database is already created.
 func (s *DoltliteStore) ensureIgnoredTables(ctx context.Context) error {
-	return s.withConn(ctx, false, func(tx *sql.Tx) error {
-		return schema.CreateIgnoredTablesSQLite(ctx, tx)
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		currentVersion, err := schema.CurrentVersion(ctx, tx)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+				currentVersion = 0
+			} else {
+				return err
+			}
+		}
+		if currentVersion == 0 {
+			_, err = schema.MigrateFreshSQLite(ctx, tx, schema.LatestVersion())
+		} else {
+			_, err = schema.MigrateUpTo(ctx, tx, schema.LatestVersion())
+		}
+		if err != nil {
+			return err
+		}
+		return ensureDoltliteLocalSchemaCompat(ctx, tx)
 	})
 }
 
@@ -745,11 +770,11 @@ func (s *DoltliteStore) CLIDir() string {
 	if s.dataDir == "" {
 		return ""
 	}
-	dsn, err := buildDSN(s.dataDir, s.database)
+	_, dbFile, err := buildDSN(s.dataDir, s.database)
 	if err != nil {
 		return ""
 	}
-	return strings.SplitN(dsn, "?", 2)[0]
+	return dbFile
 }
 
 // ---------------------------------------------------------------------------
@@ -940,7 +965,20 @@ func (s *DoltliteStore) FindWispDependentsRecursive(ctx context.Context, ids []s
 
 func (s *DoltliteStore) RenameDependencyPrefix(ctx context.Context, oldPrefix, newPrefix string) error {
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		return issueops.RenameDependencyPrefixInTx(ctx, tx, oldPrefix, newPrefix)
+		for _, table := range []string{"dependencies", "wisp_dependencies"} {
+			for _, column := range []string{"issue_id", "depends_on_issue_id", "depends_on_wisp_id"} {
+				if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+					UPDATE %s
+					SET %s = ? || substr(%s, ?)
+					WHERE %s = ? OR %s LIKE ?
+				`, table, column, column, column, column),
+					newPrefix, len(oldPrefix)+1, oldPrefix, oldPrefix+".%",
+				); err != nil {
+					return fmt.Errorf("rename dependency prefix in %s.%s: %w", table, column, err)
+				}
+			}
+		}
+		return nil
 	})
 }
 
@@ -1045,6 +1083,32 @@ func (s *DoltliteStore) ApplyCompaction(ctx context.Context, issueID string, tie
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
 		return issueops.ApplyCompactionInTx(ctx, tx, issueID, tier, originalSize, commitHash)
 	})
+}
+
+func (s *DoltliteStore) SnapshotIssue(ctx context.Context, issueID string, tier int) error {
+	return s.withConn(ctx, true, func(tx *sql.Tx) error {
+		return issueops.SnapshotIssueInTx(ctx, tx, issueID, tier)
+	})
+}
+
+func (s *DoltliteStore) GetCompactionSnapshot(ctx context.Context, issueID string) (*types.IssueSnapshot, error) {
+	var snap *types.IssueSnapshot
+	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
+		var err error
+		snap, err = issueops.GetLatestSnapshotInTx(ctx, tx, issueID)
+		return err
+	})
+	return snap, err
+}
+
+func (s *DoltliteStore) RestoreFromSnapshot(ctx context.Context, issueID string) (*types.IssueSnapshot, error) {
+	var snap *types.IssueSnapshot
+	err := s.withConn(ctx, true, func(tx *sql.Tx) error {
+		var err error
+		snap, err = issueops.RestoreFromSnapshotInTx(ctx, tx, issueID)
+		return err
+	})
+	return snap, err
 }
 
 func (s *DoltliteStore) GetTier1Candidates(ctx context.Context) ([]*types.CompactionCandidate, error) {

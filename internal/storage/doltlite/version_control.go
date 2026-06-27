@@ -142,6 +142,10 @@ func (s *DoltliteStore) CommitWithConfig(ctx context.Context, message string) er
 	})
 }
 
+func (s *DoltliteStore) CommitMergeResolution(ctx context.Context, message string) error {
+	return s.CommitWithConfig(ctx, message)
+}
+
 func (s *DoltliteStore) AddRemote(ctx context.Context, name, url string) error {
 	return s.withDBWrite(ctx, func(db versioncontrolops.DBConn) error {
 		var existing string
