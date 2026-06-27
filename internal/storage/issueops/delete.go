@@ -19,6 +19,16 @@ const maxRecursiveResults = 10000
 
 //nolint:gosec // G201: table names come from WispTableRouting (hardcoded constants)
 func DeleteIssueInTx(ctx context.Context, tx *sql.Tx, id string) error {
+	return deleteIssueInTx(ctx, tx, id, false)
+}
+
+// DeleteIssueSQLiteInTx deletes an issue using SQLite-compatible derived-state
+// recompute SQL for embedded DoltLite stores.
+func DeleteIssueSQLiteInTx(ctx context.Context, tx *sql.Tx, id string) error {
+	return deleteIssueInTx(ctx, tx, id, true)
+}
+
+func deleteIssueInTx(ctx context.Context, tx *sql.Tx, id string, sqlite bool) error {
 	isWisp := IsActiveWispInTx(ctx, tx, id)
 
 	var deletedIssues, deletedWisps []string
@@ -36,8 +46,14 @@ func DeleteIssueInTx(ctx context.Context, tx *sql.Tx, id string) error {
 		return err
 	}
 
-	if err := RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps); err != nil {
-		return fmt.Errorf("recompute is_blocked after delete for %s: %w", id, err)
+	var recomputeErr error
+	if sqlite {
+		recomputeErr = RecomputeIsBlockedSQLiteInTx(ctx, tx, affectedIssues, affectedWisps)
+	} else {
+		recomputeErr = RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps)
+	}
+	if recomputeErr != nil {
+		return fmt.Errorf("recompute is_blocked after delete for %s: %w", id, recomputeErr)
 	}
 
 	return nil

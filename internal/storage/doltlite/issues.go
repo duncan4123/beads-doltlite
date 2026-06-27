@@ -49,7 +49,7 @@ func (s *DoltliteStore) UpdateIssue(ctx context.Context, id string, updates map[
 	}
 
 	return s.withConn(ctx, true, func(tx *sql.Tx) error {
-		_, err := issueops.UpdateIssueInTx(ctx, tx, id, updates, actor)
+		_, err := issueops.UpdateIssueSQLiteInTx(ctx, tx, id, updates, actor)
 		return err
 	})
 }

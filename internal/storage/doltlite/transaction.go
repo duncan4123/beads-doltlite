@@ -86,7 +86,7 @@ func (t *embeddedTransaction) CreateIssues(ctx context.Context, issues []*types.
 func (t *embeddedTransaction) UpdateIssue(ctx context.Context, id string, updates map[string]interface{}, actor string) error {
 	t.dirty.MarkDirty("issues")
 	t.dirty.MarkDirty("events")
-	_, err := issueops.UpdateIssueInTx(ctx, t.tx, id, updates, actor)
+	_, err := issueops.UpdateIssueSQLiteInTx(ctx, t.tx, id, updates, actor)
 	return err
 }
 
@@ -103,7 +103,7 @@ func (t *embeddedTransaction) DeleteIssue(ctx context.Context, id string) error 
 	t.dirty.MarkDirty("labels")
 	t.dirty.MarkDirty("comments")
 	t.dirty.MarkDirty("events")
-	return issueops.DeleteIssueInTx(ctx, t.tx, id)
+	return issueops.DeleteIssueSQLiteInTx(ctx, t.tx, id)
 }
 
 func (t *embeddedTransaction) GetIssue(ctx context.Context, id string) (*types.Issue, error) {
@@ -144,7 +144,7 @@ func (t *embeddedTransaction) CycleThroughEdges(ctx context.Context, edges [][2]
 
 func (t *embeddedTransaction) RemoveDependency(ctx context.Context, issueID, dependsOnID string, actor string) error {
 	t.dirty.MarkDirty("dependencies")
-	return issueops.RemoveDependencyInTx(ctx, t.tx, issueID, dependsOnID)
+	return issueops.RemoveDependencySQLiteInTx(ctx, t.tx, issueID, dependsOnID)
 }
 
 func (t *embeddedTransaction) GetDependencyRecords(ctx context.Context, issueID string) ([]*types.Dependency, error) {

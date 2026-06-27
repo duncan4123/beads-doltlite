@@ -722,6 +722,16 @@ func checkRenameTargetCollision(ctx context.Context, tx *sql.Tx, table, typedCol
 //
 //nolint:gosec // G201: depTable from WispTableRouting (hardcoded constants)
 func RemoveDependencyInTx(ctx context.Context, tx *sql.Tx, issueID, dependsOnID string) error {
+	return removeDependencyInTx(ctx, tx, issueID, dependsOnID, false)
+}
+
+// RemoveDependencySQLiteInTx removes a dependency using SQLite-compatible
+// derived-state recompute SQL for embedded DoltLite stores.
+func RemoveDependencySQLiteInTx(ctx context.Context, tx *sql.Tx, issueID, dependsOnID string) error {
+	return removeDependencyInTx(ctx, tx, issueID, dependsOnID, true)
+}
+
+func removeDependencyInTx(ctx context.Context, tx *sql.Tx, issueID, dependsOnID string, sqlite bool) error {
 	isWisp := IsActiveWispInTx(ctx, tx, issueID)
 	_, _, _, depTable := WispTableRouting(isWisp)
 
@@ -754,8 +764,14 @@ func RemoveDependencyInTx(ctx context.Context, tx *sql.Tx, issueID, dependsOnID 
 	if aerr != nil {
 		return fmt.Errorf("affected by remove dependency %s -> %s: %w", issueID, dependsOnID, aerr)
 	}
-	if err := RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps); err != nil {
-		return fmt.Errorf("recompute is_blocked after remove dependency %s -> %s: %w", issueID, dependsOnID, err)
+	var recomputeErr error
+	if sqlite {
+		recomputeErr = RecomputeIsBlockedSQLiteInTx(ctx, tx, affectedIssues, affectedWisps)
+	} else {
+		recomputeErr = RecomputeIsBlockedInTx(ctx, tx, affectedIssues, affectedWisps)
+	}
+	if recomputeErr != nil {
+		return fmt.Errorf("recompute is_blocked after remove dependency %s -> %s: %w", issueID, dependsOnID, recomputeErr)
 	}
 	return nil
 }
