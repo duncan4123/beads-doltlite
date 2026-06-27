@@ -2,6 +2,13 @@ package sqlbuild
 
 import "fmt"
 
+type CountsDialect int
+
+const (
+	CountsDialectDolt CountsDialect = iota
+	CountsDialectSQLite
+)
+
 // ReadyWorkIssueColumns is IssueSelectColumns qualified with the "i." alias
 // used by the counts mega-query.
 var ReadyWorkIssueColumns = QualifyColumns(IssueSelectColumns, "i.")
@@ -19,6 +26,30 @@ const DepJSONObject = `JSON_OBJECT(
 	'thread_id', thread_id
 )`
 
+const depJSONObjectSQLite = `json_object(
+	'issue_id', issue_id,
+	'depends_on_id', COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external),
+	'type', type,
+	'created_at', strftime('%Y-%m-%dT%H:%M:%SZ', created_at),
+	'created_by', created_by,
+	'metadata', CAST(metadata AS TEXT),
+	'thread_id', thread_id
+)`
+
+func jsonArrayAgg(dialect CountsDialect, expr string) string {
+	if dialect == CountsDialectSQLite {
+		return fmt.Sprintf("json_group_array(%s)", expr)
+	}
+	return fmt.Sprintf("JSON_ARRAYAGG(%s)", expr)
+}
+
+func depJSONObject(dialect CountsDialect) string {
+	if dialect == CountsDialectSQLite {
+		return depJSONObjectSQLite
+	}
+	return DepJSONObject
+}
+
 // SearchCountsSQL renders the counts mega-query: full issue rows aliased "i"
 // plus labels JSON, dep/rdep/comment counts, parent ID, and dependency JSON,
 // for one table family. whereSQL/orderBySQL/limitSQL may be empty; the
@@ -29,6 +60,12 @@ const DepJSONObject = `JSON_OBJECT(
 // IssueSelectColumns positionally followed by the six extra columns in the
 // order projected here.
 func SearchCountsSQL(tables FilterTables, whereSQL, orderBySQL, limitSQL string, includeWispReverseDeps, skipLabels bool) string {
+	return SearchCountsSQLDialect(tables, whereSQL, orderBySQL, limitSQL, includeWispReverseDeps, skipLabels, CountsDialectDolt)
+}
+
+// SearchCountsSQLDialect is SearchCountsSQL with backend-specific JSON/date
+// functions for the count projection fragments.
+func SearchCountsSQLDialect(tables FilterTables, whereSQL, orderBySQL, limitSQL string, includeWispReverseDeps, skipLabels bool, dialect CountsDialect) string {
 	reverseBlockerSelect := `
 				SELECT COALESCE(depends_on_issue_id, depends_on_wisp_id, depends_on_external) AS dep_id
 				FROM dependencies WHERE type = 'blocks'
@@ -44,10 +81,10 @@ func SearchCountsSQL(tables FilterTables, whereSQL, orderBySQL, limitSQL string,
 	labelsSelect := "l.labels_json AS labels_json"
 	labelsJoin := fmt.Sprintf(`
 		LEFT JOIN (
-			SELECT issue_id, JSON_ARRAYAGG(label) AS labels_json
+			SELECT issue_id, %s AS labels_json
 			FROM %s
 			GROUP BY issue_id
-		) l ON l.issue_id = i.id`, tables.Labels)
+		) l ON l.issue_id = i.id`, jsonArrayAgg(dialect, "label"), tables.Labels)
 	if skipLabels {
 		labelsSelect = "NULL AS labels_json"
 		labelsJoin = ""
@@ -87,7 +124,7 @@ func SearchCountsSQL(tables FilterTables, whereSQL, orderBySQL, limitSQL string,
 			GROUP BY issue_id
 		) pc ON pc.issue_id = i.id
 		LEFT JOIN (
-			SELECT issue_id, JSON_ARRAYAGG(%s) AS deps_json
+			SELECT issue_id, %s AS deps_json
 			FROM %s
 			GROUP BY issue_id
 		) d ON d.issue_id = i.id
@@ -103,7 +140,7 @@ func SearchCountsSQL(tables FilterTables, whereSQL, orderBySQL, limitSQL string,
 		reverseBlockerSelect,
 		tables.Comments,
 		tables.Dependencies,
-		DepJSONObject,
+		jsonArrayAgg(dialect, depJSONObject(dialect)),
 		tables.Dependencies,
 		whereSQL,
 		orderBySQL,

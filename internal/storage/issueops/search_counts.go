@@ -11,6 +11,14 @@ import (
 )
 
 func SearchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter) ([]*types.IssueWithCounts, error) {
+	return searchIssuesWithCountsInTx(ctx, tx, query, filter, sqlbuild.CountsDialectDolt)
+}
+
+func SearchIssuesWithCountsSQLiteInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter) ([]*types.IssueWithCounts, error) {
+	return searchIssuesWithCountsInTx(ctx, tx, query, filter, sqlbuild.CountsDialectSQLite)
+}
+
+func searchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, dialect sqlbuild.CountsDialect) ([]*types.IssueWithCounts, error) {
 	wispDepsExist, err := optionalTableExistsInTx(ctx, tx, "wisp_dependencies")
 	if err != nil {
 		return nil, fmt.Errorf("search issues with counts: wisp dependency probe: %w", err)
@@ -22,7 +30,7 @@ func SearchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, f
 			return nil, fmt.Errorf("search issues with counts: ephemeral wisp probe: %w", probeErr)
 		}
 		if !empty && wispDepsExist {
-			wisps, err := runFilterSearchQueryInTx(ctx, tx, query, filter, WispsFilterTables, true)
+			wisps, err := runFilterSearchQueryInTx(ctx, tx, query, filter, WispsFilterTables, true, dialect)
 			if err != nil && !isTableNotExistError(err) {
 				return nil, err
 			}
@@ -36,14 +44,14 @@ func SearchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, f
 		// dropping it. Use the same IssuesFilterTables query the non-ephemeral
 		// path uses, keeping the GH#4387 count/list cardinality parity for
 		// searches that project counts (e.g. `bd search --counts --include-infra`).
-		out, err := runFilterSearchQueryInTx(ctx, tx, query, filter, IssuesFilterTables, wispDepsExist)
+		out, err := runFilterSearchQueryInTx(ctx, tx, query, filter, IssuesFilterTables, wispDepsExist, dialect)
 		if err != nil {
 			return nil, err
 		}
 		return finishSearchIssuesWithCounts(out, filter), nil
 	}
 
-	out, err := runFilterSearchQueryInTx(ctx, tx, query, filter, IssuesFilterTables, wispDepsExist)
+	out, err := runFilterSearchQueryInTx(ctx, tx, query, filter, IssuesFilterTables, wispDepsExist, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +72,7 @@ func SearchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, f
 		return finishSearchIssuesWithCounts(out, filter), nil
 	}
 
-	wisps, err := runFilterSearchQueryInTx(ctx, tx, query, filter, WispsFilterTables, true)
+	wisps, err := runFilterSearchQueryInTx(ctx, tx, query, filter, WispsFilterTables, true, dialect)
 	if err != nil {
 		if isTableNotExistError(err) {
 			return finishSearchIssuesWithCounts(out, filter), nil
@@ -96,7 +104,7 @@ func SearchIssuesWithCountsInTx(ctx context.Context, tx *sql.Tx, query string, f
 	return finishSearchIssuesWithCounts(kept, filter), nil
 }
 
-func runFilterSearchQueryInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables, includeWispReverseDeps bool) ([]*types.IssueWithCounts, error) {
+func runFilterSearchQueryInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables, includeWispReverseDeps bool, dialect sqlbuild.CountsDialect) ([]*types.IssueWithCounts, error) {
 	whereClauses, args, err := BuildIssueFilterClauses(query, filter, tables)
 	if err != nil {
 		return nil, err
@@ -110,12 +118,12 @@ func runFilterSearchQueryInTx(ctx context.Context, tx *sql.Tx, query string, fil
 		limitSQL = fmt.Sprintf("LIMIT %d", filter.Limit)
 	}
 	orderBy := sqlbuild.OrderBy(filter.SortBy, filter.SortDesc, "i")
-	return runSearchQueryInTx(ctx, tx, tables, whereSQL, orderBy, limitSQL, args, includeWispReverseDeps, filter.SkipLabels)
+	return runSearchQueryInTx(ctx, tx, tables, whereSQL, orderBy, limitSQL, args, includeWispReverseDeps, filter.SkipLabels, dialect)
 }
 
 //nolint:gosec // G201: SQL fragments are caller-built from hardcoded shapes
-func runSearchQueryInTx(ctx context.Context, tx *sql.Tx, tables FilterTables, whereSQL, orderBySQL, limitSQL string, args []interface{}, includeWispReverseDeps bool, skipLabels bool) ([]*types.IssueWithCounts, error) {
-	searchSQL := sqlbuild.SearchCountsSQL(tables, whereSQL, orderBySQL, limitSQL, includeWispReverseDeps, skipLabels)
+func runSearchQueryInTx(ctx context.Context, tx *sql.Tx, tables FilterTables, whereSQL, orderBySQL, limitSQL string, args []interface{}, includeWispReverseDeps bool, skipLabels bool, dialect sqlbuild.CountsDialect) ([]*types.IssueWithCounts, error) {
+	searchSQL := sqlbuild.SearchCountsSQLDialect(tables, whereSQL, orderBySQL, limitSQL, includeWispReverseDeps, skipLabels, dialect)
 
 	rows, err := tx.QueryContext(ctx, searchSQL, args...)
 	if err != nil {

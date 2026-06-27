@@ -7,10 +7,19 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 )
 
 func GetReadyWorkWithCountsInTx(ctx context.Context, tx *sql.Tx, filter types.WorkFilter) ([]*types.IssueWithCounts, error) {
+	return getReadyWorkWithCountsInTx(ctx, tx, filter, sqlbuild.CountsDialectDolt)
+}
+
+func GetReadyWorkWithCountsSQLiteInTx(ctx context.Context, tx *sql.Tx, filter types.WorkFilter) ([]*types.IssueWithCounts, error) {
+	return getReadyWorkWithCountsInTx(ctx, tx, filter, sqlbuild.CountsDialectSQLite)
+}
+
+func getReadyWorkWithCountsInTx(ctx context.Context, tx *sql.Tx, filter types.WorkFilter, dialect sqlbuild.CountsDialect) ([]*types.IssueWithCounts, error) {
 	wispDepsExist, err := optionalTableExistsInTx(ctx, tx, "wisp_dependencies")
 	if err != nil {
 		return nil, fmt.Errorf("get ready work with counts: wisp dependency probe: %w", err)
@@ -20,7 +29,7 @@ func GetReadyWorkWithCountsInTx(ctx context.Context, tx *sql.Tx, filter types.Wo
 	if err != nil {
 		return nil, err
 	}
-	out, err := runSearchQueryInTx(ctx, tx, IssuesFilterTables, issuePreds.whereSQL, issuePreds.orderBySQL, issuePreds.limitSQL, issuePreds.args, wispDepsExist, false)
+	out, err := runSearchQueryInTx(ctx, tx, IssuesFilterTables, issuePreds.whereSQL, issuePreds.orderBySQL, issuePreds.limitSQL, issuePreds.args, wispDepsExist, false, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +49,7 @@ func GetReadyWorkWithCountsInTx(ctx context.Context, tx *sql.Tx, filter types.Wo
 	if err != nil {
 		return nil, err
 	}
-	wisps, err := runSearchQueryInTx(ctx, tx, WispsFilterTables, wispPreds.whereSQL, wispPreds.orderBySQL, wispPreds.limitSQL, wispPreds.args, true, false)
+	wisps, err := runSearchQueryInTx(ctx, tx, WispsFilterTables, wispPreds.whereSQL, wispPreds.orderBySQL, wispPreds.limitSQL, wispPreds.args, true, false, dialect)
 	if err != nil {
 		if isTableNotExistError(err) {
 			return out, nil

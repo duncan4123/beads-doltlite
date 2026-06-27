@@ -40,8 +40,9 @@ var initCmd = &cobra.Command{
 	Long: `Initialize bd in the current directory by creating a .beads/ directory
 and Dolt database. Optionally specify a custom issue prefix.
 
-Dolt is the default (and only supported) storage backend. The legacy SQLite
-backend has been removed. Use --backend=sqlite to see migration instructions.
+Dolt is the default storage backend. The legacy SQLite backend has been
+removed. Use --backend=sqlite to see migration instructions. Use
+--backend=doltlite for the embedded DoltLite backend.
 
 Use --database to specify an existing server database name, overriding the
 default prefix-based naming. This is useful when an external tool (e.g. an orchestrator)
@@ -211,20 +212,31 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			externalConfig = &cfg
 		}
 
-		// Handle --backend flag: "dolt" is the only supported backend.
+		// Handle --backend flag. Dolt remains the default; DoltLite is an
+		// explicit local backend for embedded SQLite-compatible storage.
 		// "sqlite" is accepted for backward compatibility but prints a
 		// deprecation notice and exits with an error.
+		backend := configfile.BackendDolt
 		if backendFlag == "sqlite" {
 			fmt.Fprintf(os.Stderr, "%s The SQLite backend has been removed.\n\n", ui.RenderWarn("⚠ DEPRECATED:"))
-			fmt.Fprintf(os.Stderr, "Dolt is now the default (and only) storage backend for beads.\n")
+			fmt.Fprintf(os.Stderr, "Dolt is now the default storage backend for beads.\n")
 			fmt.Fprintf(os.Stderr, "To initialize with Dolt:\n")
 			fmt.Fprintf(os.Stderr, "  bd init\n\n")
 			fmt.Fprintf(os.Stderr, "To import issues from an existing JSONL export:\n")
 			fmt.Fprintf(os.Stderr, "  bd init --from-jsonl\n\n")
 			fmt.Fprintf(os.Stderr, "See: https://github.com/gastownhall/beads/blob/main/docs/DOLT.md\n")
 			return fmt.Errorf("--backend=sqlite is no longer supported")
-		} else if backendFlag != "" && backendFlag != "dolt" {
-			return fmt.Errorf("unknown backend %q: only \"dolt\" is supported", backendFlag)
+		} else if backendFlag == configfile.BackendDoltlite {
+			backend = configfile.BackendDoltlite
+		} else if backendFlag != "" && backendFlag != configfile.BackendDolt {
+			return fmt.Errorf("unknown backend %q: supported backends are \"dolt\" and \"doltlite\"", backendFlag)
+		}
+		useDoltlite := backend == configfile.BackendDoltlite
+		if useDoltlite && (initServerMode || sharedServer || externalServer || initProxiedServer) {
+			return fmt.Errorf("--backend=doltlite is local-only and cannot be combined with --server, --shared-server, --external, or --proxied-server")
+		}
+		if useDoltlite && initRemoteChanged && initRemote != "" {
+			return fmt.Errorf("--backend=doltlite does not support Dolt remote bootstrap")
 		}
 
 		// Validate --database format early, before any side effects.
@@ -256,9 +268,6 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			return fmt.Errorf("--team requires interactive prompts and cannot be used with --non-interactive")
 		}
 
-		// Dolt is the only supported backend
-		backend := configfile.BackendDolt
-
 		// Also treat BEADS_DOLT_SERVER_MODE=1 env var as --server.
 		if os.Getenv("BEADS_DOLT_SERVER_MODE") == "1" {
 			initServerMode = true
@@ -270,6 +279,9 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		// store and recording dolt_mode=embedded in metadata.json (GH#2946).
 		if sharedServer || strings.EqualFold(os.Getenv("BEADS_DOLT_SHARED_SERVER"), "true") || os.Getenv("BEADS_DOLT_SHARED_SERVER") == "1" {
 			initServerMode = true
+		}
+		if useDoltlite && (initServerMode || sharedServer) {
+			return fmt.Errorf("--backend=doltlite is local-only and cannot be combined with Dolt server environment settings")
 		}
 
 		// Set serverMode so !usesSQLServer() returns the correct value.
@@ -949,7 +961,7 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			doltCfg.ServerUser = serverUser
 		}
 
-		initLock, err := acquireEmbeddedLock(beadsDir, initServerMode || initProxiedServer)
+		initLock, err := acquireEmbeddedLock(beadsDir, initServerMode || initProxiedServer || useDoltlite)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return &exitError{Code: 1}
@@ -1009,7 +1021,12 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			}
 		}
 
-		store, err := newDoltStore(ctx, doltCfg)
+		var store storage.DoltStorage
+		if useDoltlite {
+			store, err = newDoltliteStore(ctx, beadsDir, dbName)
+		} else {
+			store, err = newDoltStore(ctx, doltCfg)
+		}
 		if err != nil {
 			// #4259: the remote-migrate gate refused to auto-apply pending
 			// migrations. When init just bootstrapped the clone, the REMOTE is
@@ -1156,6 +1173,15 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 
 			// Always store backend explicitly in metadata.json
 			cfg.Backend = backend
+			if backend == configfile.BackendDoltlite {
+				cfg.Database = "doltlite"
+				if database != "" {
+					cfg.DoltDatabase = database
+				} else if cfg.DoltDatabase == "" && prefix != "" {
+					cfg.DoltDatabase = strings.ReplaceAll(prefix, "-", "_")
+				}
+				cfg.DoltMode = configfile.DoltModeEmbedded
+			}
 			// Metadata.json.database should point to the Dolt directory (not beads.db).
 			// Backward-compat: older dolt setups left this as "beads.db", which is misleading.
 			if backend == configfile.BackendDolt {
@@ -1749,8 +1775,8 @@ func init() {
 	initCmd.Flags().Bool("non-interactive", false, "Skip all interactive prompts (auto-detected in CI or non-TTY environments)")
 	initCmd.Flags().String("role", "", "Set beads role without prompting: \"maintainer\" or \"contributor\"")
 
-	// Backend selection (dolt is the only supported backend; sqlite accepted for deprecation notice)
-	initCmd.Flags().String("backend", "", "Storage backend (default: dolt). --backend=sqlite prints deprecation notice.")
+	// Backend selection (dolt is the default; sqlite accepted for deprecation notice)
+	initCmd.Flags().String("backend", "", "Storage backend (default: dolt; supported: dolt, doltlite). --backend=sqlite prints deprecation notice.")
 
 	// Dolt server connection flags
 	initCmd.Flags().Bool("server", false, "Use external dolt sql-server instead of embedded engine")

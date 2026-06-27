@@ -24,7 +24,7 @@ func (s *DoltliteStore) GetReadyWorkWithCounts(ctx context.Context, filter types
 	var result []*types.IssueWithCounts
 	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
 		var err error
-		result, err = issueops.GetReadyWorkWithCountsInTx(ctx, tx, filter)
+		result, err = issueops.GetReadyWorkWithCountsSQLiteInTx(ctx, tx, filter)
 		return err
 	})
 	return result, err
