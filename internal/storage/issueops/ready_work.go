@@ -40,9 +40,13 @@ func buildReadyWorkOrder(policy types.SortPolicy) sqlbuild.ReadyWorkOrder {
 // needs (children of deferred parents, parent descendants), then delegates
 // the clause text to sqlbuild so both stacks share ready semantics.
 func buildReadyWorkPredicates(ctx context.Context, tx DBTX, filter types.WorkFilter, tables FilterTables) (*readyWorkPredicates, error) {
-	var inputs sqlbuild.ReadyWorkWhereInputs
+	return buildReadyWorkPredicatesDialect(ctx, tx, filter, tables, sqlbuild.CountsDialectDolt)
+}
+
+func buildReadyWorkPredicatesDialect(ctx context.Context, tx DBTX, filter types.WorkFilter, tables FilterTables, dialect sqlbuild.CountsDialect) (*readyWorkPredicates, error) {
+	inputs := sqlbuild.ReadyWorkWhereInputs{Dialect: dialect}
 	if !filter.IncludeDeferred {
-		deferredChildIDs, dcErr := getChildrenOfDeferredParentsInTx(ctx, tx)
+		deferredChildIDs, dcErr := getChildrenOfDeferredParentsInTx(ctx, tx, dialect)
 		if dcErr != nil {
 			return nil, fmt.Errorf("get ready work: compute deferred parent children: %w", dcErr)
 		}
@@ -88,7 +92,26 @@ func GetReadyWorkInTx(
 	tx DBTX,
 	filter types.WorkFilter,
 ) ([]*types.Issue, error) {
-	preds, err := buildReadyWorkPredicates(ctx, tx, filter, IssuesFilterTables)
+	return getReadyWorkInTx(ctx, tx, filter, sqlbuild.CountsDialectDolt)
+}
+
+// GetReadyWorkSQLiteInTx returns ready work using SQLite-compatible SQL
+// fragments for embedded DoltLite stores.
+func GetReadyWorkSQLiteInTx(
+	ctx context.Context,
+	tx DBTX,
+	filter types.WorkFilter,
+) ([]*types.Issue, error) {
+	return getReadyWorkInTx(ctx, tx, filter, sqlbuild.CountsDialectSQLite)
+}
+
+func getReadyWorkInTx(
+	ctx context.Context,
+	tx DBTX,
+	filter types.WorkFilter,
+	dialect sqlbuild.CountsDialect,
+) ([]*types.Issue, error) {
+	preds, err := buildReadyWorkPredicatesDialect(ctx, tx, filter, IssuesFilterTables, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +144,7 @@ func GetReadyWorkInTx(
 		}
 	}
 
-	wisps, wErr := getReadyWispsInTx(ctx, tx, filter, preds.deferredChildIDs)
+	wisps, wErr := getReadyWispsInTx(ctx, tx, filter, preds.deferredChildIDs, dialect)
 	if wErr != nil {
 		return nil, wErr
 	}
@@ -152,7 +175,7 @@ func mergeReadyWisps(ordered []*types.Issue, wisps []*types.Issue, filter types.
 	return kept
 }
 
-func getReadyWispsInTx(ctx context.Context, tx DBTX, filter types.WorkFilter, deferredChildIDs []string) ([]*types.Issue, error) {
+func getReadyWispsInTx(ctx context.Context, tx DBTX, filter types.WorkFilter, deferredChildIDs []string, dialect sqlbuild.CountsDialect) ([]*types.Issue, error) {
 	empty, err := wispsTableEmptyOrMissingInTx(ctx, tx)
 	if err != nil {
 		return nil, fmt.Errorf("search wisps (ready work): probe: %w", err)
@@ -164,7 +187,7 @@ func getReadyWispsInTx(ctx context.Context, tx DBTX, filter types.WorkFilter, de
 	wispFilter := readyWorkWispIssueFilter(filter)
 	if filter.Limit <= 0 {
 		wispFilter.Limit = 0
-		wisps, err := searchTableInTx(ctx, tx, "", wispFilter, WispsFilterTables)
+		wisps, err := searchTableInTxDialect(ctx, tx, "", wispFilter, WispsFilterTables, dialect)
 		if err != nil {
 			if isTableNotExistError(err) {
 				return nil, nil
@@ -178,7 +201,7 @@ func getReadyWispsInTx(ctx context.Context, tx DBTX, filter types.WorkFilter, de
 	orderBy := buildReadyWorkOrder(filter.SortPolicy)
 	ready := make([]*types.Issue, 0, filter.Limit)
 	for offset := 0; len(ready) < filter.Limit; offset += pageSize {
-		pageIDs, err := queryReadyWispIssueIDPage(ctx, tx, wispFilter, !filter.IncludeDeferred, orderBy, pageSize, offset)
+		pageIDs, err := queryReadyWispIssueIDPage(ctx, tx, wispFilter, !filter.IncludeDeferred, orderBy, pageSize, offset, dialect)
 		if err != nil {
 			if isTableNotExistError(err) {
 				return nil, nil
@@ -210,15 +233,15 @@ func getReadyWispsInTx(ctx context.Context, tx DBTX, filter types.WorkFilter, de
 	return ready, nil
 }
 
-func queryReadyWispIssueIDPage(ctx context.Context, tx DBTX, filter types.IssueFilter, excludeDeferred bool, orderBy sqlbuild.ReadyWorkOrder, limit, offset int) ([]string, error) {
+func queryReadyWispIssueIDPage(ctx context.Context, tx DBTX, filter types.IssueFilter, excludeDeferred bool, orderBy sqlbuild.ReadyWorkOrder, limit, offset int, dialect sqlbuild.CountsDialect) ([]string, error) {
 	plan := sqlbuild.BuildLabelDrivenSearch(filter, WispsFilterTables)
-	whereClauses, args, err := BuildIssueFilterClauses("", plan.Filter, WispsFilterTables)
+	whereClauses, args, err := BuildIssueFilterClausesDialect("", plan.Filter, WispsFilterTables, dialect)
 	if err != nil {
 		return nil, err
 	}
 	whereClauses, args = plan.MergeInto(whereClauses, args)
 	if excludeDeferred {
-		whereClauses = append(whereClauses, "(defer_until IS NULL OR defer_until <= UTC_TIMESTAMP())")
+		whereClauses = append(whereClauses, fmt.Sprintf("(defer_until IS NULL OR defer_until <= %s)", sqlbuild.ReadyWorkCurrentTimestamp(dialect)))
 	}
 
 	whereSQL := ""
@@ -484,7 +507,8 @@ func queryReadyIssueIDPage(ctx context.Context, tx DBTX, query string, args []in
 // future defer_until. Works within an existing transaction.
 //
 //nolint:gosec // G201: depTable is selected from a hardcoded list below.
-func getChildrenOfDeferredParentsInTx(ctx context.Context, tx DBTX) ([]string, error) {
+func getChildrenOfDeferredParentsInTx(ctx context.Context, tx DBTX, dialect sqlbuild.CountsDialect) ([]string, error) {
+	nowSQL := sqlbuild.ReadyWorkCurrentTimestamp(dialect)
 	hasDeferredParent := false
 	for _, issueTable := range []string{"issues", "wisps"} {
 		//nolint:gosec // G201: issueTable is hardcoded to "issues" or "wisps"
@@ -492,9 +516,9 @@ func getChildrenOfDeferredParentsInTx(ctx context.Context, tx DBTX) ([]string, e
 		err := tx.QueryRowContext(ctx, fmt.Sprintf(`
 			SELECT 1 FROM %s
 			WHERE defer_until IS NOT NULL
-			  AND defer_until > UTC_TIMESTAMP()
+			  AND defer_until > %s
 			LIMIT 1
-		`, issueTable)).Scan(&exists)
+		`, issueTable, nowSQL)).Scan(&exists)
 		if err == nil {
 			hasDeferredParent = true
 			break
@@ -524,8 +548,8 @@ func getChildrenOfDeferredParentsInTx(ctx context.Context, tx DBTX) ([]string, e
 				JOIN %s parent ON parent.id = dep.%s
 				WHERE dep.type = 'parent-child'
 				  AND parent.defer_until IS NOT NULL
-				  AND parent.defer_until > UTC_TIMESTAMP()
-			`, depTable, issueTable, targetCol))
+				  AND parent.defer_until > %s
+			`, depTable, issueTable, targetCol, nowSQL))
 			if err != nil {
 				if depTable == "wisp_dependencies" && isTableNotExistError(err) {
 					break

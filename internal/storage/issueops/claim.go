@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -128,13 +129,34 @@ func ClaimReadyIssueInTx(
 	filter types.WorkFilter,
 	actor string,
 ) (*types.Issue, error) {
+	return claimReadyIssueInTx(ctx, tx, filter, actor, sqlbuild.CountsDialectDolt)
+}
+
+// ClaimReadyIssueSQLiteInTx claims the first ready issue using
+// SQLite-compatible readiness SQL for embedded DoltLite stores.
+func ClaimReadyIssueSQLiteInTx(
+	ctx context.Context,
+	tx DBTX,
+	filter types.WorkFilter,
+	actor string,
+) (*types.Issue, error) {
+	return claimReadyIssueInTx(ctx, tx, filter, actor, sqlbuild.CountsDialectSQLite)
+}
+
+func claimReadyIssueInTx(
+	ctx context.Context,
+	tx DBTX,
+	filter types.WorkFilter,
+	actor string,
+	dialect sqlbuild.CountsDialect,
+) (*types.Issue, error) {
 	claimFilter := filter
 	claimFilter.Status = types.StatusOpen
 	claimFilter.Unassigned = true
 	claimFilter.Assignee = nil
 	claimFilter.Limit = 0
 
-	readyIssues, err := GetReadyWorkInTx(ctx, tx, claimFilter)
+	readyIssues, err := getReadyWorkInTx(ctx, tx, claimFilter, dialect)
 	if err != nil {
 		return nil, err
 	}

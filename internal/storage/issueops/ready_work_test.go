@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -179,7 +180,7 @@ func TestGetChildrenOfDeferredParentsInTx_ReturnsChildrenFromBothDependencyTable
 	mock.ExpectQuery(deferredChildrenQueryRegex("wisp_dependencies", "wisps")).
 		WillReturnRows(sqlmock.NewRows([]string{"issue_id"}).AddRow("child-from-wisp-dependencies-wisps"))
 
-	got, err := getChildrenOfDeferredParentsInTx(context.Background(), tx)
+	got, err := getChildrenOfDeferredParentsInTx(context.Background(), tx, sqlbuild.CountsDialectDolt)
 	if err != nil {
 		t.Fatalf("getChildrenOfDeferredParentsInTx: %v", err)
 	}
@@ -206,7 +207,7 @@ func TestGetChildrenOfDeferredParentsInTx_NoDeferredParentsExitsAfterProbe(t *te
 	mock.ExpectQuery(deferredParentProbeRegex("wisps")).
 		WillReturnRows(sqlmock.NewRows([]string{"1"}))
 
-	got, err := getChildrenOfDeferredParentsInTx(context.Background(), tx)
+	got, err := getChildrenOfDeferredParentsInTx(context.Background(), tx, sqlbuild.CountsDialectDolt)
 	if err != nil {
 		t.Fatalf("getChildrenOfDeferredParentsInTx: %v", err)
 	}
@@ -231,7 +232,7 @@ func TestGetChildrenOfDeferredParentsInTx_IgnoresMissingWispDependenciesTable(t 
 	mock.ExpectQuery(deferredChildrenQueryRegex("wisp_dependencies", "issues")).
 		WillReturnError(errors.New("table wisp_dependencies does not exist"))
 
-	got, err := getChildrenOfDeferredParentsInTx(context.Background(), tx)
+	got, err := getChildrenOfDeferredParentsInTx(context.Background(), tx, sqlbuild.CountsDialectDolt)
 	if err != nil {
 		t.Fatalf("getChildrenOfDeferredParentsInTx: %v", err)
 	}

@@ -29,7 +29,7 @@ const depTargetExpr = "COALESCE(depends_on_issue_id, depends_on_wisp_id, depends
 func (s *DoltliteStore) CountIssues(ctx context.Context, query string, filter types.IssueFilter) (int64, error) {
 	var n int64
 	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
-		count, err := issueops.CountIssuesInTx(ctx, tx, query, filter)
+		count, err := issueops.CountIssuesSQLiteInTx(ctx, tx, query, filter)
 		if err != nil {
 			return err
 		}
@@ -45,7 +45,7 @@ func (s *DoltliteStore) CountIssuesByGroup(ctx context.Context, filter types.Iss
 	var result map[string]int
 	err := s.withConn(ctx, false, func(tx *sql.Tx) error {
 		var err error
-		result, err = issueops.CountIssuesByGroupInTx(ctx, tx, filter, groupBy)
+		result, err = issueops.CountIssuesByGroupSQLiteInTx(ctx, tx, filter, groupBy)
 		return err
 	})
 	return result, err

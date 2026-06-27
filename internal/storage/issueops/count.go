@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/steveyegge/beads/internal/storage/sqlbuild"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -15,8 +16,18 @@ import (
 // SkipWisps=true counts the durable issues table only, and otherwise the
 // wisps count is merged in (GH#4387).
 func CountIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter) (int, error) {
+	return countIssuesInTx(ctx, tx, query, filter, sqlbuild.CountsDialectDolt)
+}
+
+// CountIssuesSQLiteInTx counts issues using SQLite-compatible SQL fragments for
+// embedded DoltLite stores.
+func CountIssuesSQLiteInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter) (int, error) {
+	return countIssuesInTx(ctx, tx, query, filter, sqlbuild.CountsDialectSQLite)
+}
+
+func countIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, dialect sqlbuild.CountsDialect) (int, error) {
 	if filter.Ephemeral != nil && *filter.Ephemeral {
-		wispCount, err := countTableInTx(ctx, tx, query, filter, WispsFilterTables)
+		wispCount, err := countTableInTxDialect(ctx, tx, query, filter, WispsFilterTables, dialect)
 		if err != nil && !isTableNotExistError(err) {
 			return 0, fmt.Errorf("count wisps (ephemeral filter): %w", err)
 		}
@@ -32,14 +43,14 @@ func CountIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter types
 		// normal creation never produces (ephemeral/infra beads route to the
 		// wisps table on insert), but which would otherwise be reported as 0 by
 		// count while list returns it.
-		count, err := countTableInTx(ctx, tx, query, filter, IssuesFilterTables)
+		count, err := countTableInTxDialect(ctx, tx, query, filter, IssuesFilterTables, dialect)
 		if err != nil {
 			return 0, fmt.Errorf("count issues (ephemeral fall-through): %w", err)
 		}
 		return count, nil
 	}
 
-	count, err := countTableInTx(ctx, tx, query, filter, IssuesFilterTables)
+	count, err := countTableInTxDialect(ctx, tx, query, filter, IssuesFilterTables, dialect)
 	if err != nil {
 		return 0, fmt.Errorf("count issues: %w", err)
 	}
@@ -53,7 +64,7 @@ func CountIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter types
 	// wisps row), so the two counts don't double-count. count trusts that disjoint-table
 	// invariant; SearchIssuesInTx is the corruption detector — it errors loudly if an ID
 	// appears in both tables ("id %q exists in both issues and wisps").
-	wispCount, wispErr := countTableInTx(ctx, tx, query, filter, WispsFilterTables)
+	wispCount, wispErr := countTableInTxDialect(ctx, tx, query, filter, WispsFilterTables, dialect)
 	if wispErr != nil && !isTableNotExistError(wispErr) {
 		return 0, fmt.Errorf("count wisps (merge): %w", wispErr)
 	}
@@ -68,8 +79,18 @@ func CountIssuesInTx(ctx context.Context, tx *sql.Tx, query string, filter types
 // route to the wisps table, SkipWisps=true counts the durable issues table
 // only, and otherwise the wisps tier is merged into each group (GH#4387).
 func CountIssuesByGroupInTx(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, groupBy string) (map[string]int, error) {
+	return countIssuesByGroupInTx(ctx, tx, filter, groupBy, sqlbuild.CountsDialectDolt)
+}
+
+// CountIssuesByGroupSQLiteInTx counts grouped issues using SQLite-compatible
+// SQL fragments for embedded DoltLite stores.
+func CountIssuesByGroupSQLiteInTx(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, groupBy string) (map[string]int, error) {
+	return countIssuesByGroupInTx(ctx, tx, filter, groupBy, sqlbuild.CountsDialectSQLite)
+}
+
+func countIssuesByGroupInTx(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, groupBy string, dialect sqlbuild.CountsDialect) (map[string]int, error) {
 	if filter.Ephemeral != nil && *filter.Ephemeral {
-		wispCounts, err := countGroupForTablesInTx(ctx, tx, filter, groupBy, WispsFilterTables)
+		wispCounts, err := countGroupForTablesInTxDialect(ctx, tx, filter, groupBy, WispsFilterTables, dialect)
 		if err != nil && !isTableNotExistError(err) {
 			return nil, fmt.Errorf("count wisps by %s (ephemeral filter): %w", groupBy, err)
 		}
@@ -87,14 +108,14 @@ func CountIssuesByGroupInTx(ctx context.Context, tx *sql.Tx, filter types.IssueF
 		// disagree with the sum of the grouped buckets (wisps-only), breaking
 		// the GH#4387 count/list cardinality parity for `bd count
 		// --include-infra --by-*`.
-		counts, err := countGroupForTablesInTx(ctx, tx, filter, groupBy, IssuesFilterTables)
+		counts, err := countGroupForTablesInTxDialect(ctx, tx, filter, groupBy, IssuesFilterTables, dialect)
 		if err != nil {
 			return nil, fmt.Errorf("count issues by %s (ephemeral fall-through): %w", groupBy, err)
 		}
 		return counts, nil
 	}
 
-	counts, err := countGroupForTablesInTx(ctx, tx, filter, groupBy, IssuesFilterTables)
+	counts, err := countGroupForTablesInTxDialect(ctx, tx, filter, groupBy, IssuesFilterTables, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +126,7 @@ func CountIssuesByGroupInTx(ctx context.Context, tx *sql.Tx, filter types.IssueF
 
 	// Merge wisps counts when the caller hasn't opted out (same semantics as
 	// CountIssuesInTx / SearchIssuesInTx; the two tables never share an ID).
-	wispCounts, wispErr := countGroupForTablesInTx(ctx, tx, filter, groupBy, WispsFilterTables)
+	wispCounts, wispErr := countGroupForTablesInTxDialect(ctx, tx, filter, groupBy, WispsFilterTables, dialect)
 	if wispErr != nil && !isTableNotExistError(wispErr) {
 		return nil, fmt.Errorf("count wisps by %s (merge): %w", groupBy, wispErr)
 	}
@@ -118,8 +139,12 @@ func CountIssuesByGroupInTx(ctx context.Context, tx *sql.Tx, filter types.IssueF
 // countGroupForTablesInTx runs a grouped count against one table set
 // (issues or wisps) and normalizes keys to bd count's display format.
 func countGroupForTablesInTx(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, groupBy string, tables FilterTables) (map[string]int, error) {
+	return countGroupForTablesInTxDialect(ctx, tx, filter, groupBy, tables, sqlbuild.CountsDialectDolt)
+}
+
+func countGroupForTablesInTxDialect(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, groupBy string, tables FilterTables, dialect sqlbuild.CountsDialect) (map[string]int, error) {
 	if groupBy == "label" {
-		return countByLabelInTx(ctx, tx, filter, tables)
+		return countByLabelInTxDialect(ctx, tx, filter, tables, dialect)
 	}
 
 	// Map user-facing groupBy name to SQL column name.
@@ -134,7 +159,7 @@ func countGroupForTablesInTx(ctx context.Context, tx *sql.Tx, filter types.Issue
 		return nil, fmt.Errorf("unsupported groupBy: %s", groupBy)
 	}
 
-	rawCounts, err := countByColumnInTx(ctx, tx, filter, col, tables)
+	rawCounts, err := countByColumnInTxDialect(ctx, tx, filter, col, tables, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +182,11 @@ func countGroupForTablesInTx(ctx context.Context, tx *sql.Tx, filter types.Issue
 
 // countTableInTx runs SELECT COUNT(*) FROM <table> WHERE <query+filter>.
 func countTableInTx(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables) (int, error) {
-	clauses, args, err := BuildIssueFilterClauses(query, filter, tables)
+	return countTableInTxDialect(ctx, tx, query, filter, tables, sqlbuild.CountsDialectDolt)
+}
+
+func countTableInTxDialect(ctx context.Context, tx *sql.Tx, query string, filter types.IssueFilter, tables FilterTables, dialect sqlbuild.CountsDialect) (int, error) {
+	clauses, args, err := BuildIssueFilterClausesDialect(query, filter, tables, dialect)
 	if err != nil {
 		return 0, err
 	}
@@ -177,7 +206,11 @@ func countTableInTx(ctx context.Context, tx *sql.Tx, query string, filter types.
 // countByColumnInTx runs SELECT <col>, COUNT(*) GROUP BY <col> against a table.
 // Returns raw column values as keys (callers normalize for display).
 func countByColumnInTx(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, col string, tables FilterTables) (map[string]int, error) {
-	clauses, args, err := BuildIssueFilterClauses("", filter, tables)
+	return countByColumnInTxDialect(ctx, tx, filter, col, tables, sqlbuild.CountsDialectDolt)
+}
+
+func countByColumnInTxDialect(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, col string, tables FilterTables, dialect sqlbuild.CountsDialect) (map[string]int, error) {
+	clauses, args, err := BuildIssueFilterClausesDialect("", filter, tables, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +241,11 @@ func countByColumnInTx(ctx context.Context, tx *sql.Tx, filter types.IssueFilter
 // Dolt's joinIter panic (join_iters.go:192). Issues with no labels are counted
 // under "(no labels)".
 func countByLabelInTx(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, tables FilterTables) (map[string]int, error) {
-	clauses, args, err := BuildIssueFilterClauses("", filter, tables)
+	return countByLabelInTxDialect(ctx, tx, filter, tables, sqlbuild.CountsDialectDolt)
+}
+
+func countByLabelInTxDialect(ctx context.Context, tx *sql.Tx, filter types.IssueFilter, tables FilterTables, dialect sqlbuild.CountsDialect) (map[string]int, error) {
+	clauses, args, err := BuildIssueFilterClausesDialect("", filter, tables, dialect)
 	if err != nil {
 		return nil, err
 	}

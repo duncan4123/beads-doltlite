@@ -72,6 +72,9 @@ func BuildReadyWorkOrder(policy types.SortPolicy, createdCol, priorityCol string
 // clause folds in. Computing them takes queries, which is execution-context
 // work each stack does its own way.
 type ReadyWorkWhereInputs struct {
+	// Dialect controls backend-specific SQL functions. The zero value keeps the
+	// Dolt/MySQL behavior for existing callers.
+	Dialect CountsDialect
 	// DeferredChildIDs are children of future-deferred parents; consulted
 	// only when !filter.IncludeDeferred.
 	DeferredChildIDs []string
@@ -84,6 +87,7 @@ type ReadyWorkWhereInputs struct {
 // family. Both stacks must keep ready semantics identical (Seam A parity
 // suite); all ready predicates live here.
 func BuildReadyWorkWhere(filter types.WorkFilter, tables FilterTables, in ReadyWorkWhereInputs) (string, []any, error) {
+	nowSQL := ReadyWorkCurrentTimestamp(in.Dialect)
 	var statusClause string
 	if filter.Status != "" {
 		statusClause = "status = ?"
@@ -123,7 +127,7 @@ func BuildReadyWorkWhere(filter types.WorkFilter, tables FilterTables, in ReadyW
 	}
 
 	if !filter.IncludeDeferred {
-		whereClauses = append(whereClauses, "(defer_until IS NULL OR defer_until <= UTC_TIMESTAMP())")
+		whereClauses = append(whereClauses, fmt.Sprintf("(defer_until IS NULL OR defer_until <= %s)", nowSQL))
 		for start := 0; start < len(in.DeferredChildIDs); start += QueryBatchSize {
 			end := start + QueryBatchSize
 			if end > len(in.DeferredChildIDs) {
@@ -155,7 +159,7 @@ func BuildReadyWorkWhere(filter types.WorkFilter, tables FilterTables, in ReadyW
 	// help text and WorkFilter.ParentID godoc both promising recursion.
 	if filter.ParentID != nil {
 		parentID := *filter.ParentID
-		parentClauses := []string{fmt.Sprintf("(id LIKE CONCAT(?, '.%%') AND id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child'))", tables.Dependencies)}
+		parentClauses := []string{fmt.Sprintf("(%s AND id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child'))", ReadyWorkChildIDLikeExpr(in.Dialect), tables.Dependencies)}
 		args = append(args, parentID)
 		for start := 0; start < len(in.ParentDescendantIDs); start += QueryBatchSize {
 			end := start + QueryBatchSize
@@ -170,15 +174,34 @@ func BuildReadyWorkWhere(filter types.WorkFilter, tables FilterTables, in ReadyW
 	}
 
 	if filter.MoleculeID != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("(id IN (SELECT issue_id FROM %s WHERE type = 'parent-child' AND %s = ?) OR (id LIKE CONCAT(?, '.%%') AND id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child')))", tables.Dependencies, DepTargetExpr, tables.Dependencies))
+		whereClauses = append(whereClauses, fmt.Sprintf("(id IN (SELECT issue_id FROM %s WHERE type = 'parent-child' AND %s = ?) OR (%s AND id NOT IN (SELECT issue_id FROM %s WHERE type = 'parent-child')))", tables.Dependencies, DepTargetExpr, ReadyWorkChildIDLikeExpr(in.Dialect), tables.Dependencies))
 		args = append(args, filter.MoleculeID, filter.MoleculeID)
 	}
 
 	var err error
-	whereClauses, args, err = AppendMetadataClauses(whereClauses, args, filter.HasMetadataKey, filter.MetadataFields)
+	whereClauses, args, err = AppendMetadataClausesDialect(whereClauses, args, filter.HasMetadataKey, filter.MetadataFields, in.Dialect)
 	if err != nil {
 		return "", nil, err
 	}
 
 	return "WHERE " + strings.Join(whereClauses, " AND "), args, nil
+}
+
+// ReadyWorkCurrentTimestamp returns the backend-specific SQL expression for
+// comparing ready-work defer timestamps against the current UTC time.
+func ReadyWorkCurrentTimestamp(dialect CountsDialect) string {
+	if dialect == CountsDialectSQLite {
+		return "CURRENT_TIMESTAMP"
+	}
+	return "UTC_TIMESTAMP()"
+}
+
+// ReadyWorkChildIDLikeExpr returns the backend-specific hierarchical child ID
+// fallback predicate. The caller supplies the parent ID as the expression's
+// single placeholder argument.
+func ReadyWorkChildIDLikeExpr(dialect CountsDialect) string {
+	if dialect == CountsDialectSQLite {
+		return "id LIKE (? || '.%')"
+	}
+	return "id LIKE CONCAT(?, '.%')"
 }

@@ -178,6 +178,70 @@ func TestSmokeChildIDAndDependencyUseSQLiteDialect(t *testing.T) {
 	}
 }
 
+func TestSmokeCloseUsesSQLiteBlockedRecompute(t *testing.T) {
+	ctx := t.Context()
+	store, err := doltlite.New(ctx, filepath.Join(t.TempDir(), ".beads"), "beads", "main")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.SetConfig(ctx, "issue_prefix", "bd"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	now := time.Now().UTC()
+	blocked := &types.Issue{
+		ID:        "bd-blocked",
+		Title:     "blocked",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	blocker := &types.Issue{
+		ID:        "bd-blocker",
+		Title:     "blocker",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := store.CreateIssue(ctx, blocked, "test"); err != nil {
+		t.Fatalf("CreateIssue blocked: %v", err)
+	}
+	if err := store.CreateIssue(ctx, blocker, "test"); err != nil {
+		t.Fatalf("CreateIssue blocker: %v", err)
+	}
+	if err := store.AddDependency(ctx, &types.Dependency{
+		IssueID:     blocked.ID,
+		DependsOnID: blocker.ID,
+		Type:        types.DepBlocks,
+	}, "test"); err != nil {
+		t.Fatalf("AddDependency: %v", err)
+	}
+	isBlocked, _, err := store.IsBlocked(ctx, blocked.ID)
+	if err != nil {
+		t.Fatalf("IsBlocked before close: %v", err)
+	}
+	if !isBlocked {
+		t.Fatalf("%s should be blocked before closing %s", blocked.ID, blocker.ID)
+	}
+
+	if err := store.CloseIssue(ctx, blocker.ID, "done", "test", "sess"); err != nil {
+		t.Fatalf("CloseIssue: %v", err)
+	}
+	isBlocked, _, err = store.IsBlocked(ctx, blocked.ID)
+	if err != nil {
+		t.Fatalf("IsBlocked after close: %v", err)
+	}
+	if isBlocked {
+		t.Fatalf("%s should be unblocked after closing %s", blocked.ID, blocker.ID)
+	}
+}
+
 func TestSmokeVersionControl(t *testing.T) {
 	ctx := t.Context()
 	store, err := doltlite.New(ctx, filepath.Join(t.TempDir(), ".beads"), "beads", "main")

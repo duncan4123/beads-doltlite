@@ -25,7 +25,7 @@ func getReadyWorkWithCountsInTx(ctx context.Context, tx *sql.Tx, filter types.Wo
 		return nil, fmt.Errorf("get ready work with counts: wisp dependency probe: %w", err)
 	}
 
-	issuePreds, err := buildReadyWorkPredicates(ctx, tx, filter, IssuesFilterTables)
+	issuePreds, err := buildReadyWorkPredicatesDialect(ctx, tx, filter, IssuesFilterTables, dialect)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func getReadyWorkWithCountsInTx(ctx context.Context, tx *sql.Tx, filter types.Wo
 		return out, nil
 	}
 
-	wispPreds, err := buildReadyWorkPredicates(ctx, tx, filter, WispsFilterTables)
+	wispPreds, err := buildReadyWorkPredicatesDialect(ctx, tx, filter, WispsFilterTables, dialect)
 	if err != nil {
 		return nil, err
 	}
