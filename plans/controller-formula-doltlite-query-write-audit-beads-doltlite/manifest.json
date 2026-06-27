@@ -1,0 +1,12 @@
+{
+  "artifact_root": "/data/projects/doltlite-gascity/beads-doltlite/plans/controller-formula-doltlite-query-write-audit-beads-doltlite",
+  "documents": {
+    "plan": {
+      "path": "/data/projects/doltlite-gascity/beads-doltlite/plans/controller-formula-doltlite-query-write-audit-beads-doltlite/plan.md",
+      "schema": "gc.build.plan.v1",
+      "hash": "sha256:ae1730700c21310d043881cbfafd2594112346db0b0b829449be05c68aba4aa4",
+      "change_id": "vmxnysrwuokytlyssrmruokymwomyvou"
+    }
+  },
+  "latest_change_id": "vmxnysrwuokytlyssrmruokymwomyvou"
+}
