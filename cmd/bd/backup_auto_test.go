@@ -67,10 +67,17 @@ func TestIsBackupAutoEnabled(t *testing.T) {
 			// Set env var: "\x00" = unset, anything else = set to that value
 			if tt.envVal == "\x00" {
 				os.Unsetenv("BD_BACKUP_ENABLED")
-				t.Cleanup(func() { os.Unsetenv("BD_BACKUP_ENABLED") })
+				os.Unsetenv("BEADS_BACKUP_ENABLED")
+				t.Cleanup(func() {
+					os.Unsetenv("BD_BACKUP_ENABLED")
+					os.Unsetenv("BEADS_BACKUP_ENABLED")
+				})
 			} else {
 				t.Setenv("BD_BACKUP_ENABLED", tt.envVal)
+				os.Unsetenv("BEADS_BACKUP_ENABLED")
+				t.Cleanup(func() { os.Unsetenv("BEADS_BACKUP_ENABLED") })
 			}
+			t.Setenv("BEADS_DIR", filepath.Join(t.TempDir(), ".beads"))
 
 			config.ResetForTesting()
 			t.Cleanup(func() { config.ResetForTesting() })
@@ -80,7 +87,9 @@ func TestIsBackupAutoEnabled(t *testing.T) {
 
 			got := isBackupAutoEnabled()
 			if got != tt.wantResult {
-				t.Errorf("isBackupAutoEnabled() = %v, want %v", got, tt.wantResult)
+				t.Errorf("isBackupAutoEnabled() = %v, want %v (source=%v, value=%v, config=%q)",
+					got, tt.wantResult, config.GetValueSource("backup.enabled"), config.GetBool("backup.enabled"),
+					config.ConfigFileUsed())
 			}
 		})
 	}

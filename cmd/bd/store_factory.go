@@ -14,6 +14,7 @@ import (
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	"github.com/steveyegge/beads/internal/storage/doltlite"
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
 )
 
@@ -63,6 +64,13 @@ func newDoltStore(ctx context.Context, cfg *dolt.Config) (storage.DoltStorage, e
 	return embeddeddolt.Open(ctx, cfg.BeadsDir, cfg.Database, "main")
 }
 
+func newDoltliteStore(ctx context.Context, beadsDir, database string) (storage.DoltStorage, error) {
+	if database == "" {
+		database = configfile.DefaultDoltDatabase
+	}
+	return doltlite.New(ctx, beadsDir, database, "main")
+}
+
 // acquireEmbeddedLock acquires an exclusive flock on the embeddeddolt data
 // directory derived from beadsDir. The caller must defer lock.Unlock().
 // Returns a no-op lock when serverMode is true (the server handles its own
@@ -92,6 +100,9 @@ func acquireEmbeddedLock(beadsDir string, serverMode bool) (util.Unlocker, error
 // auto-sanitized to underscores and the fix is persisted to metadata.json.
 func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		return newDoltliteStore(ctx, beadsDir, cfg.GetDoltDatabase())
+	}
 	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
 		// TODO: this needs to be uow provider
 		return nil, fmt.Errorf("proxy server store should be uow provider")
@@ -165,6 +176,9 @@ func migrateHyphenatedDB(beadsDir string, cfg *configfile.Config, oldName, newNa
 // hydration from mutating foreign projects (GH#3231).
 func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
+	if err == nil && cfg != nil && cfg.IsDoltliteBackend() {
+		return newDoltliteStore(ctx, beadsDir, cfg.GetDoltDatabase())
+	}
 	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
 		// TODO: this needs to be uow provider
 		return nil, fmt.Errorf("proxy server store needs to be uow provider")

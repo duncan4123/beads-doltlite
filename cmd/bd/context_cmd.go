@@ -98,6 +98,7 @@ Examples:
 		}
 
 		info.DoltMode = cfg.GetDoltMode()
+		info.Backend = cfg.GetBackend()
 		info.Database = cfg.GetDoltDatabase()
 		info.ProjectID = cfg.ProjectID
 

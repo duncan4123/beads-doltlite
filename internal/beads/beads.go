@@ -428,6 +428,17 @@ func findLocalBeadsDir() string {
 func findDatabaseInBeadsDir(beadsDir string, _ bool) string {
 	// Check for metadata.json first (single source of truth)
 	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil {
+		if cfg.IsDoltliteBackend() {
+			doltlitePath := filepath.Join(beadsDir, "doltlite", cfg.GetDoltDatabase()+".db")
+			if info, err := os.Stat(doltlitePath); err == nil && !info.IsDir() {
+				return doltlitePath
+			}
+			doltliteDir := filepath.Join(beadsDir, "doltlite")
+			if info, err := os.Stat(doltliteDir); err == nil && info.IsDir() {
+				return doltliteDir
+			}
+			return ""
+		}
 		// For Dolt server mode, database is on the server - no local directory required
 		if cfg.IsDoltServerMode() {
 			return cfg.DatabasePath(beadsDir)
@@ -643,8 +654,9 @@ func hasBeadsProjectFiles(beadsDir string) bool {
 
 // hasBeadsDatabase is the strict counterpart to hasBeadsProjectFiles: it
 // returns true only when beadsDir contains an actual database — a dolt/
-// directory, an embeddeddolt/ directory, or a non-backup *.db file. Mere
-// presence of metadata.json / config.yaml / issues.jsonl does not count.
+// directory, an embeddeddolt/ directory, a doltlite/*.db file, or a
+// non-backup *.db file. Mere presence of metadata.json / config.yaml /
+// issues.jsonl does not count.
 //
 // Used by FindBeadsDir's worktree-separate-DB branch to distinguish a
 // genuine separate-database worktree (which owns its own Dolt data) from
@@ -658,6 +670,13 @@ func hasBeadsDatabase(beadsDir string) bool {
 	}
 	if info, err := os.Stat(filepath.Join(beadsDir, "embeddeddolt")); err == nil && info.IsDir() {
 		return true
+	}
+	doltliteMatches, _ := filepath.Glob(filepath.Join(beadsDir, "doltlite", "*.db"))
+	for _, match := range doltliteMatches {
+		baseName := filepath.Base(match)
+		if !strings.HasPrefix(baseName, ".") && !strings.Contains(baseName, ".backup") {
+			return true
+		}
 	}
 	dbMatches, _ := filepath.Glob(filepath.Join(beadsDir, "*.db"))
 	for _, match := range dbMatches {
