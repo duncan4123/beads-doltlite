@@ -474,17 +474,88 @@ func ensureDoltliteWispDependenciesShape(ctx context.Context, tx *sql.Tx) error 
 			return fmt.Errorf("counting legacy wisp_dependencies rows: %w", err)
 		}
 	}
-	if rows > 0 {
-		return fmt.Errorf("legacy wisp_dependencies table has %d rows; refusing automatic DoltLite shape repair", rows)
+	if rows == 0 {
+		if _, err := tx.ExecContext(ctx, sqliteWispDependenciesSchema("wisp_dependencies")); err != nil {
+			return fmt.Errorf("repairing wisp_dependencies schema: %w", err)
+		}
+		return nil
 	}
-	if _, err := tx.ExecContext(ctx, sqliteWispDependenciesSchema); err != nil {
-		return fmt.Errorf("repairing wisp_dependencies schema: %w", err)
+
+	if err := migrateLegacyDoltliteWispDependencies(ctx, tx); err != nil {
+		return fmt.Errorf("repairing legacy wisp_dependencies schema with %d rows: %w", rows, err)
 	}
 	return nil
 }
 
-const sqliteWispDependenciesSchema = `DROP TABLE IF EXISTS wisp_dependencies;
-CREATE TABLE wisp_dependencies (
+func migrateLegacyDoltliteWispDependencies(ctx context.Context, tx *sql.Tx) error {
+	columns, err := doltliteColumns(ctx, tx, "wisp_dependencies")
+	if err != nil {
+		return err
+	}
+	if !columns["depends_on_id"] {
+		return fmt.Errorf("legacy wisp_dependencies missing depends_on_id")
+	}
+
+	const tmpTable = "wisp_dependencies_doltlite_repair"
+	if _, err := tx.ExecContext(ctx, sqliteWispDependenciesSchema(tmpTable)); err != nil {
+		return fmt.Errorf("creating repair table: %w", err)
+	}
+
+	target := "NULLIF(depends_on_id, '')"
+	wispExists := "EXISTS (SELECT 1 FROM wisps w WHERE w.id = " + target + ")"
+	issueExists := "EXISTS (SELECT 1 FROM issues i WHERE i.id = " + target + ")"
+	idExpr := doltliteLegacyColumnValue(columns, "id", "issue_id || ':' || "+target)
+	typeExpr := doltliteLegacyColumnValue(columns, "type", "'blocks'")
+	createdAtExpr := doltliteLegacyColumnValue(columns, "created_at", "CURRENT_TIMESTAMP")
+	createdByExpr := doltliteLegacyColumnValue(columns, "created_by", "''")
+	metadataExpr := doltliteLegacyColumnValue(columns, "metadata", "'{}'")
+	threadIDExpr := doltliteLegacyColumnValue(columns, "thread_id", "''")
+
+	copySQL := fmt.Sprintf(`
+INSERT OR IGNORE INTO %[1]s (
+    id, issue_id, depends_on_issue_id, depends_on_wisp_id, depends_on_external,
+    type, created_at, created_by, metadata, thread_id
+)
+SELECT
+    %[2]s,
+    issue_id,
+    CASE WHEN %[3]s NOT LIKE 'external:%%' AND NOT (%[4]s) AND (%[5]s) THEN %[3]s ELSE NULL END,
+    CASE WHEN %[3]s NOT LIKE 'external:%%' AND (%[4]s) THEN %[3]s ELSE NULL END,
+    CASE WHEN %[3]s LIKE 'external:%%' OR (NOT (%[4]s) AND NOT (%[5]s)) THEN %[3]s ELSE NULL END,
+    %[6]s,
+    %[7]s,
+    %[8]s,
+    %[9]s,
+    %[10]s
+FROM wisp_dependencies
+WHERE NULLIF(issue_id, '') IS NOT NULL
+  AND %[3]s IS NOT NULL
+`, tmpTable, idExpr, target, wispExists, issueExists, typeExpr, createdAtExpr, createdByExpr, metadataExpr, threadIDExpr)
+	if _, err := tx.ExecContext(ctx, copySQL); err != nil {
+		return fmt.Errorf("copying legacy rows: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DROP TABLE wisp_dependencies"); err != nil {
+		return fmt.Errorf("dropping legacy table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "ALTER TABLE "+tmpTable+" RENAME TO wisp_dependencies"); err != nil {
+		return fmt.Errorf("renaming repair table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, sqliteWispDependenciesIndexes("wisp_dependencies")); err != nil {
+		return fmt.Errorf("creating repaired indexes: %w", err)
+	}
+	return nil
+}
+
+func doltliteLegacyColumnValue(columns map[string]bool, column, fallback string) string {
+	if !columns[column] {
+		return fallback
+	}
+	return fmt.Sprintf("COALESCE(NULLIF(%s, ''), %s)", column, fallback)
+}
+
+func sqliteWispDependenciesSchema(table string) string {
+	return fmt.Sprintf(`DROP TABLE IF EXISTS %[1]s;
+CREATE TABLE %[1]s (
     id CHAR(36) NOT NULL PRIMARY KEY,
     issue_id VARCHAR(255) NOT NULL,
     depends_on_issue_id VARCHAR(255) NULL,
@@ -499,12 +570,17 @@ CREATE TABLE wisp_dependencies (
     UNIQUE (issue_id, depends_on_wisp_id),
     UNIQUE (issue_id, depends_on_external)
 );
-CREATE INDEX IF NOT EXISTS idx_wisp_dep_type_issue ON wisp_dependencies (type, depends_on_issue_id);
-CREATE INDEX IF NOT EXISTS idx_wisp_dep_type_wisp ON wisp_dependencies (type, depends_on_wisp_id);
-CREATE INDEX IF NOT EXISTS idx_wisp_dep_type_external ON wisp_dependencies (type, depends_on_external);
-CREATE INDEX IF NOT EXISTS idx_wisp_dep_wisp_target ON wisp_dependencies (depends_on_wisp_id);
-CREATE INDEX IF NOT EXISTS idx_wisp_dep_issue_target ON wisp_dependencies (depends_on_issue_id);
-CREATE INDEX IF NOT EXISTS idx_wisp_dep_external_target ON wisp_dependencies (depends_on_external);`
+%[2]s`, table, sqliteWispDependenciesIndexes(table))
+}
+
+func sqliteWispDependenciesIndexes(table string) string {
+	return fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_wisp_dep_type_issue ON %[1]s (type, depends_on_issue_id);
+CREATE INDEX IF NOT EXISTS idx_wisp_dep_type_wisp ON %[1]s (type, depends_on_wisp_id);
+CREATE INDEX IF NOT EXISTS idx_wisp_dep_type_external ON %[1]s (type, depends_on_external);
+CREATE INDEX IF NOT EXISTS idx_wisp_dep_wisp_target ON %[1]s (depends_on_wisp_id);
+CREATE INDEX IF NOT EXISTS idx_wisp_dep_issue_target ON %[1]s (depends_on_issue_id);
+CREATE INDEX IF NOT EXISTS idx_wisp_dep_external_target ON %[1]s (depends_on_external);`, table)
+}
 
 func ensureDoltliteColumn(ctx context.Context, tx *sql.Tx, table, column, alterSQL string) error {
 	hasColumn, err := doltliteColumnExists(ctx, tx, table, column)
@@ -521,11 +597,20 @@ func ensureDoltliteColumn(ctx context.Context, tx *sql.Tx, table, column, alterS
 }
 
 func doltliteColumnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	columns, err := doltliteColumns(ctx, tx, table)
+	if err != nil {
+		return false, err
+	}
+	return columns[column], nil
+}
+
+func doltliteColumns(ctx context.Context, tx *sql.Tx, table string) (map[string]bool, error) {
 	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
-		return false, fmt.Errorf("reading %s columns: %w", table, err)
+		return nil, fmt.Errorf("reading %s columns: %w", table, err)
 	}
 	defer rows.Close()
+	columns := make(map[string]bool)
 	for rows.Next() {
 		var cid int
 		var name, typ string
@@ -533,16 +618,14 @@ func doltliteColumnExists(ctx context.Context, tx *sql.Tx, table, column string)
 		var dflt sql.NullString
 		var pk int
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return false, fmt.Errorf("scanning %s columns: %w", table, err)
+			return nil, fmt.Errorf("scanning %s columns: %w", table, err)
 		}
-		if name == column {
-			return true, nil
-		}
+		columns[name] = true
 	}
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("reading %s columns: %w", table, err)
+		return nil, fmt.Errorf("reading %s columns: %w", table, err)
 	}
-	return false, nil
+	return columns, nil
 }
 
 // GetIssue is implemented in get_issue.go.
