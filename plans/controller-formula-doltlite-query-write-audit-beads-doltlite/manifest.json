@@ -18,7 +18,13 @@
       "schema": "gc.build.review.v1",
       "hash": "sha256:bdfcbe6ba946a077643915c5c45aab0fea502cd74ce7bf89c896afc7fe2ff974",
       "change_id": "rqnqrpvsklwsmvouqoqmnummsllwqzkk"
+    },
+    "implementation-summary": {
+      "path": "/data/projects/doltlite-gascity/beads-doltlite/plans/controller-formula-doltlite-query-write-audit-beads-doltlite/implementation-summary.md",
+      "schema": "gc.build.implementation-summary.v1",
+      "hash": "sha256:46fd881d8a6186e21ec71de4b36a24b6caf1bbf63ed9d2533d7f1a473589fa7e",
+      "change_id": "kzytryvkzrmlozurywvtzpxwyxzzznyq"
     }
   },
-  "latest_change_id": "rqnqrpvsklwsmvouqoqmnummsllwqzkk"
+  "latest_change_id": "kzytryvkzrmlozurywvtzpxwyxzzznyq"
 }
