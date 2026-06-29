@@ -1,0 +1,117 @@
+name: DoltLite linked backend
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/doltlite-linked.yml"
+      - "cmd/bd/**"
+      - "internal/configfile/**"
+      - "internal/storage/**"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".buildflags"
+  push:
+    branches:
+      - "gascity-doltlite-pin"
+      - "doltlite/**"
+      - "feat/doltlite/**"
+      - "fix/doltlite/**"
+  workflow_dispatch:
+    inputs:
+      doltlite_ref:
+        description: "DoltLite ref to build"
+        required: false
+        default: "master"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doltlite-linked-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  BD_DISABLE_METRICS: "1"
+  BD_DISABLE_EVENT_FLUSH: "1"
+  DOLTLITE_REF: ${{ inputs.doltlite_ref || 'master' }}
+
+jobs:
+  source-built-doltlite:
+    name: Source-built DoltLite backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout beads
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout DoltLite
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          repository: dolthub/doltlite
+          ref: ${{ env.DOLTLITE_REF }}
+          path: doltlite-src
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: "go.mod"
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential tcl zlib1g-dev
+
+      - name: Build DoltLite from source
+        run: |
+          set -euo pipefail
+          mkdir -p doltlite-src/build
+          cd doltlite-src/build
+          ../configure
+          make -j"$(nproc)" doltlite-lib doltlite
+          printf 'SELECT doltlite_engine();\n' | ./doltlite :memory:
+
+      - name: Test native DoltLite storage package
+        env:
+          DOLTLITE_LIB: ${{ github.workspace }}/doltlite-src/build
+          LD_LIBRARY_PATH: ${{ github.workspace }}/doltlite-src/build
+        run: make test-doltlite
+
+      - name: Build linked bd binary
+        env:
+          DOLTLITE_LIB: ${{ github.workspace }}/doltlite-src/build
+          LD_LIBRARY_PATH: ${{ github.workspace }}/doltlite-src/build
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          source ./.buildflags
+          CGO_ENABLED=1 \
+          CGO_LDFLAGS="-L${DOLTLITE_LIB} -Wl,-rpath,${DOLTLITE_LIB} -ldoltlite" \
+            go build -tags "libsqlite3 ${BEADS_BUILD_TAGS}" -o artifacts/bd-doltlite ./cmd/bd
+          ./artifacts/bd-doltlite version
+
+      - name: Smoke test bd with DoltLite backend
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/doltlite-src/build
+          BD_NON_INTERACTIVE: "1"
+          BD_DISABLE_METRICS: "1"
+          BD_DISABLE_EVENT_FLUSH: "1"
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          git init -q
+          git config beads.role maintainer
+          export BEADS_DIR="$workdir/.beads"
+          "${GITHUB_WORKSPACE}/artifacts/bd-doltlite" init --backend doltlite --prefix dl --role maintainer --quiet --skip-hooks --skip-agents
+          "${GITHUB_WORKSPACE}/artifacts/bd-doltlite" create "DoltLite workflow smoke" --json
+          "${GITHUB_WORKSPACE}/artifacts/bd-doltlite" list --json
+          find .beads/doltlite -maxdepth 1 -name '*.db' -type f | grep -q .
+
+      - name: Upload linked bd artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bd-doltlite-linux
+          path: artifacts/bd-doltlite
+          retention-days: 3
+          if-no-files-found: error
