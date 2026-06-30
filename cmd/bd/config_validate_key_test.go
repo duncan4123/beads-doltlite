@@ -9,7 +9,7 @@ func TestIsRecognizedConfigKey(t *testing.T) {
 	recognized := []string{
 		"export.auto", "dolt.auto-push", "jira.url", "custom.anything",
 		"doctor.suppress.git-hooks", "no-git-ops", "beads.role",
-		"status.custom", "ai.model", "backup.enabled", "import.path",
+		"status.custom", "types.custom", "ai.model", "backup.enabled", "import.path",
 		"dolt.local-only",
 	}
 	for _, key := range recognized {
