@@ -314,7 +314,11 @@ func buildListFilter(in listInput, cfg listFilterConfig) (types.IssueFilter, err
 		filter.HasMetadataKey = in.hasMetadataKey
 	}
 
-	if !in.includeInfra && (in.issueType == "" || !cfg.isInfra(in.issueType)) {
+	if in.includeEphemeral {
+		ephemeral := true
+		filter.Ephemeral = &ephemeral
+		filter.SkipWisps = false
+	} else if !in.includeInfra && (in.issueType == "" || !cfg.isInfra(in.issueType)) {
 		filter.SkipWisps = true
 	}
 
