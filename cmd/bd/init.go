@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/beads/cmd/bd/doctor"
 	"github.com/steveyegge/beads/cmd/bd/setup"
@@ -96,7 +97,14 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 		serverSocket, _ := cmd.Flags().GetString("server-socket")
 		serverUser, _ := cmd.Flags().GetString("server-user")
 		database, _ := cmd.Flags().GetString("database")
+		projectID, _ := cmd.Flags().GetString("project-id")
 		destroyToken, _ := cmd.Flags().GetString("destroy-token")
+		projectID = strings.TrimSpace(projectID)
+		if projectID != "" {
+			if _, err := uuid.Parse(projectID); err != nil {
+				return fmt.Errorf("invalid --project-id %q: must be a UUID", projectID)
+			}
+		}
 
 		// --force is a deprecated alias for --reinit-local. They share
 		// semantics for the local data-safety guard; both refuse remote
@@ -1143,6 +1151,9 @@ Non-interactive mode (--non-interactive or BD_NON_INTERACTIVE=1):
 			} else {
 				cfg = configfile.DefaultConfig()
 			}
+			if projectID != "" {
+				cfg.ProjectID = projectID
+			}
 
 			// Generate project identity UUID if not already set (GH#2372).
 			// This UUID is stored in both metadata.json and the database,
@@ -1785,6 +1796,7 @@ func init() {
 	initCmd.Flags().String("server-socket", "", "Unix domain socket path (overrides host/port)")
 	initCmd.Flags().String("server-user", "", "Dolt server MySQL user (default: root)")
 	initCmd.Flags().String("database", "", "Use existing server database name (overrides prefix-based naming)")
+	initCmd.Flags().String("project-id", "", "Use an existing project identity instead of generating one")
 	initCmd.Flags().Bool("shared-server", false, "Enable shared Dolt server mode (all projects share one server at ~/.beads/shared-server/)")
 	initCmd.Flags().Bool("external", false, "Server is externally managed (skip server startup); use with --shared-server or --server")
 	initCmd.Flags().Bool("debug", false, "Run the managed Dolt sql-server with --loglevel=debug and CPU profiling (--prof cpu). Persisted to config.yaml as dolt.debug. No effect on externally-managed servers.")

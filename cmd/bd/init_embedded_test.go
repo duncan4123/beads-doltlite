@@ -1398,6 +1398,43 @@ func TestEmbeddedInit(t *testing.T) {
 		}
 	})
 
+	t.Run("project_id_flag_preserves_identity", func(t *testing.T) {
+		const wantProjectID = "11111111-2222-4333-8444-555555555555"
+		_, beadsDir, _ := bdInit(t, bd,
+			"--prefix", "pid",
+			"--project-id", wantProjectID,
+		)
+		cfg, err := configfile.Load(beadsDir)
+		if err != nil {
+			t.Fatalf("failed to load metadata.json: %v", err)
+		}
+		if cfg.ProjectID != wantProjectID {
+			t.Fatalf("metadata.json project_id = %q, want %q", cfg.ProjectID, wantProjectID)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		store, err := newDoltStoreFromConfig(ctx, beadsDir)
+		if err != nil {
+			t.Fatalf("newDoltStoreFromConfig: %v", err)
+		}
+		defer store.Close()
+		gotProjectID, err := store.GetMetadata(ctx, "_project_id")
+		if err != nil {
+			t.Fatalf("GetMetadata(_project_id): %v", err)
+		}
+		if gotProjectID != wantProjectID {
+			t.Fatalf("database _project_id = %q, want %q", gotProjectID, wantProjectID)
+		}
+	})
+
+	t.Run("project_id_flag_rejects_invalid_uuid", func(t *testing.T) {
+		out := bdInitFail(t, bd, "--project-id", "not-a-uuid")
+		if !strings.Contains(out, "invalid --project-id") {
+			t.Fatalf("expected invalid --project-id error, got: %s", out)
+		}
+	})
+
 	t.Run("files_created", func(t *testing.T) {
 		dir, beadsDir, _ := bdInit(t, bd, "--prefix", "fc", "--skip-hooks")
 		requireFile(t, filepath.Join(beadsDir, "config.yaml"))
