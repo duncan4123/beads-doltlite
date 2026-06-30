@@ -1,0 +1,217 @@
+name: Fork DoltLite Release
+
+on:
+  push:
+    branches:
+      - "fork/doltlite-release-workflow"
+      - "fork/release/**"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Fork release tag to create or publish, e.g. v1.0.5-doltlite.2"
+        required: true
+        type: string
+      target_ref:
+        description: "Commit SHA, branch, or tag to build"
+        required: true
+        default: "main"
+        type: string
+      doltlite_version:
+        description: "DoltLite release library version"
+        required: true
+        default: "0.11.23"
+        type: string
+
+concurrency:
+  group: fork-doltlite-release-${{ inputs.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  fork-doltlite-release:
+    name: Fork DoltLite release
+    if: ${{ github.repository == 'duncan4123/beads-doltlite' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ${{ inputs.target_ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve fork release tag
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.tag_name || '' }}
+          TARGET_REF: ${{ inputs.target_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$REQUESTED_TAG" ]; then
+            TAG_NAME="$REQUESTED_TAG"
+          else
+            TAG_NAME="v0.0.0-doltlite.${GITHUB_RUN_NUMBER}"
+          fi
+
+          if ! [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-doltlite\.[0-9]+$ ]]; then
+            echo "ERROR: tag must match vMAJOR.MINOR.PATCH-doltlite.N, got: $TAG_NAME" >&2
+            exit 1
+          fi
+
+          commit="$(git rev-parse HEAD)"
+          git fetch --force --tags origin
+
+          if git rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$TAG_NAME")"
+            if [ "$tagged_commit" != "$commit" ]; then
+              echo "ERROR: tag $TAG_NAME points at $tagged_commit, not checked-out commit $commit from $TARGET_REF" >&2
+              exit 1
+            fi
+            echo "Using existing tag $TAG_NAME at $commit"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG_NAME" -m "Release $TAG_NAME" "$commit"
+            git push origin "refs/tags/$TAG_NAME"
+            echo "Created tag $TAG_NAME at $commit"
+          fi
+
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Download DoltLite release library
+        id: doltlite
+        env:
+          DOLTLITE_VERSION: ${{ inputs.doltlite_version }}
+        run: |
+          set -euo pipefail
+          version="${DOLTLITE_VERSION#v}"
+          asset="doltlite-lib-linux-x64-${version}.zip"
+          base_url="https://github.com/dolthub/doltlite/releases/download/v${version}"
+          work_dir="${RUNNER_TEMP}/doltlite-lib/${version}"
+          zip_path="${work_dir}/${asset}"
+          lib_dir="${work_dir}/lib"
+          mkdir -p "$work_dir"
+
+          python3 - "$base_url/$asset" "$zip_path" <<'PY'
+          import os
+          import sys
+          import tempfile
+          import urllib.request
+
+          url, dest = sys.argv[1], sys.argv[2]
+          directory = os.path.dirname(dest)
+          fd, tmp = tempfile.mkstemp(prefix=".download-", dir=directory)
+          os.close(fd)
+          try:
+              with urllib.request.urlopen(url, timeout=120) as response:
+                  with open(tmp, "wb") as out:
+                      while True:
+                          chunk = response.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          out.write(chunk)
+              os.replace(tmp, dest)
+          except Exception:
+              try:
+                  os.unlink(tmp)
+              except OSError:
+                  pass
+              raise
+          PY
+
+          rm -rf "$lib_dir"
+          python3 - "$zip_path" "$lib_dir" <<'PY'
+          import os
+          import shutil
+          import sys
+          import tempfile
+          import zipfile
+
+          zip_path, dest = sys.argv[1], sys.argv[2]
+          tmp = tempfile.mkdtemp(prefix="doltlite-lib-")
+          try:
+              with zipfile.ZipFile(zip_path) as archive:
+                  archive.extractall(tmp)
+              entries = [os.path.join(tmp, name) for name in os.listdir(tmp)]
+              src = entries[0] if len(entries) == 1 and os.path.isdir(entries[0]) else tmp
+              os.makedirs(os.path.dirname(dest), exist_ok=True)
+              shutil.copytree(src, dest)
+          finally:
+              shutil.rmtree(tmp, ignore_errors=True)
+          PY
+
+          test -r "$lib_dir/doltlite.h"
+          test -r "$lib_dir/libdoltlite.a"
+          echo "lib_dir=$lib_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Build bd-doltlite
+        env:
+          DOLTLITE_LIB: ${{ steps.doltlite.outputs.lib_dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          source ./.buildflags
+          CGO_ENABLED=1 \
+          CGO_CFLAGS="-I${DOLTLITE_LIB}" \
+          CGO_LDFLAGS="-L${DOLTLITE_LIB} ${DOLTLITE_LIB}/libdoltlite.a -lz -lpthread -lm" \
+            go build -tags "libsqlite3 ${BEADS_BUILD_TAGS}" -o artifacts/bd-doltlite-linux-amd64 ./cmd/bd
+          ./artifacts/bd-doltlite-linux-amd64 version
+
+      - name: Smoke test bd with DoltLite backend
+        env:
+          BD_NON_INTERACTIVE: "1"
+          BD_DISABLE_METRICS: "1"
+          BD_DISABLE_EVENT_FLUSH: "1"
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          cd "$workdir"
+          git init -q
+          git config beads.role maintainer
+          export BEADS_DIR="$workdir/.beads"
+          "${GITHUB_WORKSPACE}/artifacts/bd-doltlite-linux-amd64" init --backend doltlite --prefix dl --role maintainer --quiet --skip-hooks --skip-agents
+          "${GITHUB_WORKSPACE}/artifacts/bd-doltlite-linux-amd64" create "DoltLite fork release smoke" --json
+          "${GITHUB_WORKSPACE}/artifacts/bd-doltlite-linux-amd64" list --json
+          find .beads/doltlite -maxdepth 1 -name '*.db' -type f | grep -q .
+
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum bd-doltlite-linux-amd64 > checksums.txt
+
+      - name: Publish fork release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --title "bd $TAG_NAME" --notes "Fork DoltLite-linked bd release."
+          fi
+          gh release upload "$TAG_NAME" artifacts/bd-doltlite-linux-amd64 artifacts/checksums.txt --clobber
+
+      - name: Summarize fork release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+          TARGET_COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          url="$(gh release view "$TAG_NAME" --json url --jq .url)"
+          {
+            echo "### Fork DoltLite release"
+            echo
+            echo "- Tag: \`$TAG_NAME\`"
+            echo "- Commit: \`$TARGET_COMMIT\`"
+            echo "- Release: $url"
+          } >> "$GITHUB_STEP_SUMMARY"
