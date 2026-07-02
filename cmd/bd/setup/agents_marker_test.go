@@ -150,6 +150,58 @@ func TestInstallAgentsWithProfileCreatesNew(t *testing.T) {
 	}
 }
 
+func TestInstallAgentsNoRemoteScrubsLegacyHeader(t *testing.T) {
+	orig := detectRenderOptsImpl
+	detectRenderOptsImpl = func() agents.RenderOpts { return agents.RenderOpts{HasRemote: false} }
+	t.Cleanup(func() { detectRenderOptsImpl = orig })
+
+	env, _, _ := newFactoryTestEnv(t)
+	legacy := `# Agent Instructions
+
+This project uses **bd** (beads) for issue tracking. Run ` + "`bd onboard`" + ` to get started.
+
+## Quick Reference
+
+` + "```bash" + `
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work atomically
+bd close <id>         # Complete work
+bd dolt push          # Push beads data to remote
+` + "```" + `
+
+<!-- BEGIN BEADS INTEGRATION -->
+old section
+<!-- END BEADS INTEGRATION -->
+`
+	if err := os.WriteFile(env.agentsPath, []byte(legacy), 0644); err != nil {
+		t.Fatalf("write legacy agents file: %v", err)
+	}
+
+	integration := agentsIntegration{
+		name:         "TestAgent",
+		setupCommand: "bd setup testagent",
+		profile:      agents.ProfileFull,
+	}
+	if err := installAgents(env, integration); err != nil {
+		t.Fatalf("installAgents returned error: %v", err)
+	}
+
+	data, err := readFileBytes(env.agentsPath)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	content := string(data)
+	for _, stale := range []string{"bd dolt push", "Push beads data to remote"} {
+		if strings.Contains(content, stale) {
+			t.Errorf("local-only install should remove stale header fragment %q", stale)
+		}
+	}
+	if !strings.Contains(content, "profile:full") {
+		t.Error("managed section should still be rendered")
+	}
+}
+
 func TestInstallAgentsDefaultsToFullProfile(t *testing.T) {
 	env, _, _ := newFactoryTestEnv(t)
 	integration := agentsIntegration{
