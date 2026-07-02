@@ -229,6 +229,21 @@ func normalizeEmbeddedMarkdown(content string) string {
 // Strips the indented code-block line from session completion, and the
 // informational Auto-Sync bullet that references dolt push/pull.
 func stripDoltPushReferences(body string) string {
+	const remoteDefaultArchitecture = "> **Architecture in one line:** Issues live in a local Dolt database\n" +
+		"> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a\n" +
+		"> git-compatible protocol), stored under `refs/dolt/data` on your git\n" +
+		"> remote — separate from `refs/heads/*` where your code lives.\n" +
+		"> `.beads/issues.jsonl` is a passive export, not the wire protocol.\n"
+	const localDefaultArchitecture = "> **Architecture in one line:** Issues live in a local Dolt database\n" +
+		"> (`.beads/dolt/`). There is no configured Dolt remote, so `bd` work stays\n" +
+		"> local unless this repository explicitly configures one. `.beads/issues.jsonl`\n" +
+		"> is a passive export, not the wire protocol.\n"
+	body = strings.ReplaceAll(body, remoteDefaultArchitecture, localDefaultArchitecture)
+
+	const remoteSectionArchitecture = "**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns."
+	const localSectionArchitecture = "**Architecture in one line:** issues live in a local Dolt DB with no configured Dolt remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns."
+	body = strings.ReplaceAll(body, remoteSectionArchitecture, localSectionArchitecture)
+
 	// Session completion code block: exactly "   bd dolt push\n" (3-space indent).
 	// Pad both ends with "\n" so a single anchored ReplaceAll handles the line
 	// whether it appears at the start, middle, or end of the body, without
@@ -239,6 +254,8 @@ func stripDoltPushReferences(body string) string {
 	body = padded[1 : len(padded)-1]
 	// Auto-Sync informational bullet (full profile only)
 	body = strings.ReplaceAll(body, "- Use `bd dolt push`/`bd dolt pull` for remote sync\n", "")
+	body = strings.ReplaceAll(body, "bd dolt push          # Push beads data to remote\n", "")
+	body = strings.ReplaceAll(body, "- `bd dolt push` - Push beads to remote\n", "")
 	return body
 }
 

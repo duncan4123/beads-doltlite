@@ -59,6 +59,48 @@ func TestEmbeddedDefaultArchitectureSummary(t *testing.T) {
 	}
 }
 
+func TestEmbeddedDefaultWithOptsNoRemoteOmitsDoltSyncCommands(t *testing.T) {
+	content := EmbeddedDefaultWithOpts(RenderOpts{HasRemote: false})
+
+	for _, stale := range []string{
+		"bd dolt push",
+		"bd dolt push/pull",
+		"Push beads data to remote",
+		"refs/dolt/data",
+	} {
+		if strings.Contains(content, stale) {
+			t.Errorf("local-only default should not contain %q", stale)
+		}
+	}
+
+	for _, want := range []string{
+		"local Dolt database",
+		"no configured Dolt remote",
+		"bd prime",
+		"BEGIN BEADS INTEGRATION",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("local-only default missing %q", want)
+		}
+	}
+
+	idx := strings.Index(content, "<!-- BEGIN BEADS INTEGRATION")
+	if idx == -1 {
+		t.Fatal("missing managed section marker")
+	}
+	line := content[idx:]
+	if nl := strings.Index(line, "\n"); nl != -1 {
+		line = line[:nl]
+	}
+	meta := ParseMarker(line)
+	if meta == nil {
+		t.Fatalf("failed to parse managed marker %q", line)
+	}
+	if meta.Hash != CurrentHashWithOpts(ProfileFull, RenderOpts{HasRemote: false}) {
+		t.Errorf("marker hash = %q, want %q", meta.Hash, CurrentHashWithOpts(ProfileFull, RenderOpts{HasRemote: false}))
+	}
+}
+
 func TestEmbeddedBeadsSection(t *testing.T) {
 	section := EmbeddedBeadsSection()
 

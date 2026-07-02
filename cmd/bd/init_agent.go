@@ -49,7 +49,7 @@ func updateAgentFile(filename string, verbose bool, templatePath string, profile
 			}
 			newContent = string(data)
 		} else {
-			newContent = agents.EmbeddedDefault()
+			newContent = agents.EmbeddedDefaultWithOpts(opts)
 		}
 
 		// Replace the beads section with the requested profile.
@@ -60,6 +60,7 @@ func updateAgentFile(filename string, verbose bool, templatePath string, profile
 				newContent = replaced
 			}
 		}
+		newContent = agents.ApplyRenderOptsToContent(newContent, opts)
 
 		// #nosec G306 - markdown needs to be readable
 		if err := os.WriteFile(filename, []byte(newContent), 0644); err != nil {
@@ -93,6 +94,10 @@ func updateAgentFile(filename string, verbose bool, templatePath string, profile
 		if replaceErr != nil {
 			return fmt.Errorf("failed to update beads section in %s: %w", filename, replaceErr)
 		}
+		if scrubbed := agents.ApplyRenderOptsToContent(updated, opts); scrubbed != updated {
+			updated = scrubbed
+			changed = true
+		}
 		if changed {
 			// #nosec G306 - markdown needs to be readable
 			if err := os.WriteFile(filename, []byte(updated), 0644); err != nil {
@@ -108,7 +113,7 @@ func updateAgentFile(filename string, verbose bool, templatePath string, profile
 	}
 
 	// Append beads section with profile metadata
-	newContent := contentStr
+	newContent := agents.ApplyRenderOptsToContent(contentStr, opts)
 	if !strings.HasSuffix(newContent, "\n") {
 		newContent += "\n"
 	}

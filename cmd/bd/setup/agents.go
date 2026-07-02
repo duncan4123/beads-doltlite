@@ -144,13 +144,14 @@ func installAgents(env agentsEnv, integration agentsIntegration) error {
 	if currentContent != "" {
 		if containsBeadsMarker(currentContent) {
 			newContent := updateBeadsSectionWithOpts(currentContent, profile, opts)
+			newContent = agents.ApplyRenderOptsToContent(newContent, opts)
 			if err := atomicWriteFile(env.agentsPath, []byte(newContent)); err != nil {
 				_, _ = fmt.Fprintf(env.stderr, "Error: write %s: %v\n", env.agentsPath, err)
 				return err
 			}
 			_, _ = fmt.Fprintf(env.stdout, "✓ Updated existing beads section in %s\n", agentsFile)
 		} else {
-			newContent := currentContent + "\n\n" + beadsSection
+			newContent := agents.ApplyRenderOptsToContent(currentContent, opts) + "\n\n" + beadsSection
 			if err := atomicWriteFile(env.agentsPath, []byte(newContent)); err != nil {
 				_, _ = fmt.Fprintf(env.stderr, "Error: write %s: %v\n", env.agentsPath, err)
 				return err
