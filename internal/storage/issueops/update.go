@@ -125,17 +125,23 @@ type UpdateResult struct {
 //
 //nolint:gosec // G201: table names come from WispTableRouting (hardcoded constants)
 func UpdateIssueInTx(ctx context.Context, tx DBTX, id string, updates map[string]interface{}, actor string) (*UpdateResult, error) {
-	return updateIssueInTx(ctx, tx, id, updates, actor, true)
+	return updateIssueInTx(ctx, tx, id, updates, actor, true, false)
+}
+
+// UpdateIssueSQLiteInTx updates an issue using SQLite-compatible derived-state
+// recompute SQL for embedded DoltLite stores.
+func UpdateIssueSQLiteInTx(ctx context.Context, tx DBTX, id string, updates map[string]interface{}, actor string) (*UpdateResult, error) {
+	return updateIssueInTx(ctx, tx, id, updates, actor, true, true)
 }
 
 // UpdateIssueWithoutEventInTx applies normal update semantics without recording
 // an intermediate event. Demotion uses this to preserve the historical event
 // stream: create/update history is copied, then a single demotion event is added.
 func UpdateIssueWithoutEventInTx(ctx context.Context, tx DBTX, id string, updates map[string]interface{}, actor string) (*UpdateResult, error) {
-	return updateIssueInTx(ctx, tx, id, updates, actor, false)
+	return updateIssueInTx(ctx, tx, id, updates, actor, false, false)
 }
 
-func updateIssueInTx(ctx context.Context, tx DBTX, id string, updates map[string]interface{}, actor string, recordEvent bool) (*UpdateResult, error) {
+func updateIssueInTx(ctx context.Context, tx DBTX, id string, updates map[string]interface{}, actor string, recordEvent bool, sqlite bool) (*UpdateResult, error) {
 	// Route to correct table.
 	isWisp := IsActiveWispInTx(ctx, tx, id)
 	issueTable, _, eventTable, _ := WispTableRouting(isWisp)
@@ -214,6 +220,14 @@ func updateIssueInTx(ctx context.Context, tx DBTX, id string, updates map[string
 
 	// Auto-manage started_at (set on transition to in_progress). (GH#2796)
 	setClauses, args = ManageStartedAt(oldIssue, updates, setClauses, args)
+
+	// Rewrite row_lock on every update so a concurrent lease mutation (heartbeat/
+	// reclaim) collides on this shared cell and is forced to conflict-and-retry
+	// rather than silently cell-merging two writes to different columns of the
+	// same row (see lease.go). This is the "every mutating path writes row_lock"
+	// invariant the lease scheme depends on.
+	setClauses = append(setClauses, "row_lock = ?")
+	args = append(args, freshRowLock())
 
 	args = append(args, id)
 

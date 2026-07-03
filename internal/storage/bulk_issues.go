@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/steveyegge/beads/internal/types"
 )
@@ -14,6 +15,8 @@ type BulkIssueStore interface {
 	UpdateIssueID(ctx context.Context, oldID, newID string, issue *types.Issue, actor string) error
 	ClaimIssue(ctx context.Context, id string, actor string) error
 	ClaimReadyIssue(ctx context.Context, filter types.WorkFilter, actor string) (*types.Issue, error)
+	HeartbeatIssue(ctx context.Context, id, actor string) error
+	ReclaimExpiredLeases(ctx context.Context, olderThan time.Duration, actor string) ([]types.ReclaimedLease, error)
 	PromoteFromEphemeral(ctx context.Context, id string, actor string) error
 	GetNextChildID(ctx context.Context, parentID string) (string, error)
 }
