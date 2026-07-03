@@ -271,6 +271,56 @@ func (s *DoltStore) ClaimReadyIssue(ctx context.Context, filter types.WorkFilter
 	return claimed, nil
 }
 
+// HeartbeatIssue refreshes the lease on an issue actor holds in_progress.
+func (s *DoltStore) HeartbeatIssue(ctx context.Context, id, actor string) error {
+	if s.isActiveWisp(ctx, id) {
+		return fmt.Errorf("%w: %s is ephemeral", storage.ErrNotClaimable, id)
+	}
+	return s.withRetryTx(ctx, func(tx *sql.Tx) error {
+		if err := issueops.HeartbeatIssueInTx(ctx, tx, id, actor); err != nil {
+			return err
+		}
+		for _, table := range []string{"issues"} {
+			_, _ = tx.ExecContext(ctx, "CALL DOLT_ADD(?)", table)
+		}
+		commitMsg := fmt.Sprintf("bd: heartbeat %s", id)
+		if _, err := tx.ExecContext(ctx, "CALL DOLT_COMMIT('-m', ?, '--author', ?)",
+			commitMsg, s.commitAuthorString()); err != nil && !isDoltNothingToCommit(err) {
+			return fmt.Errorf("dolt commit: %w", err)
+		}
+		return nil
+	})
+}
+
+// ReclaimExpiredLeases reverts stale in_progress leases back to ready.
+func (s *DoltStore) ReclaimExpiredLeases(ctx context.Context, olderThan time.Duration, actor string) ([]types.ReclaimedLease, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	var reclaimed []types.ReclaimedLease
+	err := s.withRetryTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		reclaimed, err = issueops.ReclaimExpiredLeasesInTx(ctx, tx, cutoff, actor)
+		if err != nil {
+			return err
+		}
+		if len(reclaimed) == 0 {
+			return nil
+		}
+		for _, table := range []string{"issues", "events"} {
+			_, _ = tx.ExecContext(ctx, "CALL DOLT_ADD(?)", table)
+		}
+		commitMsg := fmt.Sprintf("bd: reclaim %d expired lease(s)", len(reclaimed))
+		if _, err := tx.ExecContext(ctx, "CALL DOLT_COMMIT('-m', ?, '--author', ?)",
+			commitMsg, s.commitAuthorString()); err != nil && !isDoltNothingToCommit(err) {
+			return fmt.Errorf("dolt commit: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return reclaimed, nil
+}
+
 // ReopenIssue reopens a closed issue, setting status to open and clearing
 // closed_at and defer_until. If reason is non-empty, it is recorded as a comment.
 // Wraps UpdateIssue for Dolt-specific concerns (wisp routing, DOLT_COMMIT, etc.).

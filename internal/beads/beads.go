@@ -438,6 +438,13 @@ func findDatabaseInBeadsDir(beadsDir string, _ bool) string {
 		if info, err := os.Stat(embeddedPath); err == nil && info.IsDir() {
 			return embeddedPath
 		}
+		// Plugin-backed DoltLite scopes store their local database files under
+		// .beads/doltlite/. Treat that directory as a real database root so the
+		// CLI reaches the backend factory instead of failing before plugin open.
+		doltlitePath := filepath.Join(beadsDir, "doltlite")
+		if info, err := os.Stat(doltlitePath); err == nil && info.IsDir() {
+			return doltlitePath
+		}
 		// Fall back to configured database path (e.g. .beads/dolt/ for
 		// server-mode installs or legacy setups that pre-date embeddeddolt).
 		doltPath := cfg.DatabasePath(beadsDir)
@@ -450,6 +457,10 @@ func findDatabaseInBeadsDir(beadsDir string, _ bool) string {
 	embeddedPath := filepath.Join(beadsDir, "embeddeddolt")
 	if info, err := os.Stat(embeddedPath); err == nil && info.IsDir() {
 		return embeddedPath
+	}
+	doltlitePath := filepath.Join(beadsDir, "doltlite")
+	if info, err := os.Stat(doltlitePath); err == nil && info.IsDir() {
+		return doltlitePath
 	}
 	doltPath := filepath.Join(beadsDir, "dolt")
 	if info, err := os.Stat(doltPath); err == nil && info.IsDir() {
@@ -628,6 +639,9 @@ func hasBeadsProjectFiles(beadsDir string) bool {
 	if info, err := os.Stat(filepath.Join(beadsDir, "embeddeddolt")); err == nil && info.IsDir() {
 		return true
 	}
+	if info, err := os.Stat(filepath.Join(beadsDir, "doltlite")); err == nil && info.IsDir() {
+		return true
+	}
 
 	// Check for database files (excluding backups and vc.db)
 	dbMatches, _ := filepath.Glob(filepath.Join(beadsDir, "*.db"))
@@ -657,6 +671,9 @@ func hasBeadsDatabase(beadsDir string) bool {
 		return true
 	}
 	if info, err := os.Stat(filepath.Join(beadsDir, "embeddeddolt")); err == nil && info.IsDir() {
+		return true
+	}
+	if info, err := os.Stat(filepath.Join(beadsDir, "doltlite")); err == nil && info.IsDir() {
 		return true
 	}
 	dbMatches, _ := filepath.Glob(filepath.Join(beadsDir, "*.db"))

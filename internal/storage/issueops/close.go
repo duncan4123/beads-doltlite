@@ -19,15 +19,21 @@ type CloseResult struct {
 // and recording the close event. Routes to the correct table (issues/wisps)
 // automatically. The caller is responsible for Dolt versioning if needed.
 func CloseIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string) (*CloseResult, error) {
-	return closeIssueInTx(ctx, tx, id, reason, actor, session, true)
+	return closeIssueInTx(ctx, tx, id, reason, actor, session, true, false)
+}
+
+// CloseIssueSQLiteInTx closes an issue using SQLite-compatible derived-state
+// recompute SQL for embedded DoltLite stores.
+func CloseIssueSQLiteInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string) (*CloseResult, error) {
+	return closeIssueInTx(ctx, tx, id, reason, actor, session, true, true)
 }
 
 func CloseIssueWithoutEventInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string) (*CloseResult, error) {
-	return closeIssueInTx(ctx, tx, id, reason, actor, session, false)
+	return closeIssueInTx(ctx, tx, id, reason, actor, session, false, false)
 }
 
 //nolint:gosec // G201: table names come from WispTableRouting (hardcoded constants)
-func closeIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string, recordEvent bool) (*CloseResult, error) {
+func closeIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, session string, recordEvent bool, sqlite bool) (*CloseResult, error) {
 	isWisp := IsActiveWispInTx(ctx, tx, id)
 	issueTable, _, eventTable, _ := WispTableRouting(isWisp)
 
@@ -44,10 +50,16 @@ func closeIssueInTx(ctx context.Context, tx DBTX, id string, reason, actor, sess
 
 	now := time.Now().UTC()
 
+	// row_lock is rewritten on close so a concurrent reclaim (which also rewrites
+	// row_lock) collides on this cell and is forced to conflict-and-retry rather
+	// than silently cell-merging a revert-to-ready over a completed close (see
+	// lease.go). lease_expires_at/heartbeat_at are cleared: a closed issue holds
+	// no lease.
 	result, err := tx.ExecContext(ctx, fmt.Sprintf(`
-		UPDATE %s SET status = ?, closed_at = ?, updated_at = ?, close_reason = ?, closed_by_session = ?
+		UPDATE %s SET status = ?, closed_at = ?, updated_at = ?, close_reason = ?, closed_by_session = ?,
+			lease_expires_at = NULL, heartbeat_at = NULL, row_lock = ?
 		WHERE id = ? AND status != ?
-	`, issueTable), types.StatusClosed, now, now, reason, session, id, types.StatusClosed)
+	`, issueTable), types.StatusClosed, now, now, reason, session, freshRowLock(), id, types.StatusClosed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to close issue: %w", err)
 	}
