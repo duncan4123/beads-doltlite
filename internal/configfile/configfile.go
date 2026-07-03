@@ -19,6 +19,12 @@ type Config struct {
 	Database string `json:"database"`
 	Backend  string `json:"backend,omitempty"` // Deprecated: always "dolt". Kept for JSON compat.
 
+	// Backend plugin configuration. When BackendPluginCommand is set, command
+	// code can open the configured backend through an external plugin process
+	// instead of an in-process provider.
+	BackendPluginCommand string   `json:"backend_plugin_command,omitempty"`
+	BackendPluginArgs    []string `json:"backend_plugin_args,omitempty"`
+
 	// Deletions configuration
 	DeletionsRetentionDays int `json:"deletions_retention_days,omitempty"` // 0 means use default (3 days)
 
@@ -204,9 +210,20 @@ func (c *Config) GetCapabilities() BackendCapabilities {
 	return CapabilitiesForBackend(backend)
 }
 
-// GetBackend returns the backend type. Always returns "dolt".
+// GetBackend returns the backend type. Legacy empty/sqlite values are
+// normalized to Dolt, while other names are preserved so backend plugins can be
+// resolved by the provider registry.
 func (c *Config) GetBackend() string {
-	return BackendDolt
+	if c == nil {
+		return BackendDolt
+	}
+	backend := strings.ToLower(strings.TrimSpace(c.Backend))
+	switch backend {
+	case "", "sqlite":
+		return BackendDolt
+	default:
+		return backend
+	}
 }
 
 // Dolt mode constants

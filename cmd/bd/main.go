@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/subosito/gotenv"
 
+	"github.com/steveyegge/beads/internal/backend/pluginprocess"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
@@ -1111,7 +1112,20 @@ var rootCmd = &cobra.Command{
 		// Removing them WILL cause unrecoverable data corruption and data loss.
 		// Dolt manages these files itself; external interference is never safe.
 
-		store, err = newDoltStore(rootCtx, doltCfg)
+		if cfg != nil && cfg.BackendPluginCommand != "" {
+			store, err = pluginprocess.Open(rootCtx, pluginprocess.OpenOptions{
+				Config: pluginprocess.Config{
+					Backend: cfg.GetBackend(),
+					Command: cfg.BackendPluginCommand,
+					Args:    cfg.BackendPluginArgs,
+				},
+				BeadsDir: beadsDir,
+				Database: doltCfg.Database,
+				Branch:   "main",
+			})
+		} else {
+			store, err = newDoltStore(rootCtx, doltCfg)
+		}
 
 		// Track final read-only state for staleness checks (GH#1089)
 		storeIsReadOnly = doltCfg.ReadOnly
