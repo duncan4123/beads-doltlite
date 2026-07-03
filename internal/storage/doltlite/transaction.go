@@ -156,8 +156,18 @@ func (t *embeddedTransaction) GetDependencyRecords(ctx context.Context, issueID 
 }
 
 func (t *embeddedTransaction) AddLabel(ctx context.Context, issueID, label, actor string) error {
-	t.dirty.MarkDirty("labels")
-	return issueops.AddLabelInTx(ctx, t.tx, "", "", issueID, label, actor)
+	isWisp := issueops.IsActiveWispInTx(ctx, t.tx, issueID)
+	_, labelTable, eventTable, _ := issueops.WispTableRouting(isWisp)
+	t.dirty.MarkDirty(labelTable)
+	t.dirty.MarkDirty(eventTable)
+	if _, err := t.tx.ExecContext(ctx, fmt.Sprintf("INSERT OR IGNORE INTO %s (issue_id, label) VALUES (?, ?)", labelTable), issueID, label); err != nil {
+		return fmt.Errorf("add label: %w", err)
+	}
+	if _, err := t.tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO %s (id, issue_id, event_type, actor, comment) VALUES (?, ?, ?, ?, ?)", eventTable),
+		issueops.NewEventID(), issueID, types.EventLabelAdded, actor, "Added label: "+label); err != nil {
+		return fmt.Errorf("add label: record event: %w", err)
+	}
+	return nil
 }
 
 func (t *embeddedTransaction) RemoveLabel(ctx context.Context, issueID, label, actor string) error {
