@@ -27,6 +27,19 @@ func TestNocgoNewDoltStore_ErrorSuggestsCorrectFlag(t *testing.T) {
 	}
 }
 
+func TestNocgoNewDoltliteStore_ErrorRequiresCGO(t *testing.T) {
+	_, err := newDoltliteStore(t.Context(), t.TempDir(), "beads")
+	if err == nil {
+		t.Fatal("expected error for DoltLite in a non-CGO build")
+	}
+	msg := err.Error()
+	for _, want := range []string{"DoltLite requires a CGO build", "CGO_ENABLED=0", "CGO_ENABLED=1", "libdoltlite"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error should contain %q, got: %s", want, msg)
+		}
+	}
+}
+
 // TestNocgoNewDoltStoreFromConfig_ErrorSuggestsCorrectFlag verifies that
 // newDoltStoreFromConfig suggests "bd init --server" when no server-mode
 // config exists.

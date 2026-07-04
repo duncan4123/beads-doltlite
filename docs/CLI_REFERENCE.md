@@ -940,6 +940,7 @@ bd list [flags]
       --format string                Output format: 'digraph' (for golang.org/x/tools/cmd/digraph), 'dot' (Graphviz), or Go template
       --has-metadata-key string      Filter issues that have this metadata key set
       --id string                    Filter by specific issue IDs (comma-separated, e.g., bd-1,bd-5,bd-10)
+      --include-ephemeral            Include ephemeral issues (wisps) in results
       --include-gates                Include gate issues in output (normally hidden)
       --include-infra                Include infrastructure beads (agent/role/message) in output
       --include-templates            Include template molecules in output
@@ -3440,8 +3441,9 @@ bd info [flags]
 Initialize bd in the current directory by creating a .beads/ directory
 and Dolt database. Optionally specify a custom issue prefix.
 
-Dolt is the default (and only supported) storage backend. The legacy SQLite
-backend has been removed. Use --backend=sqlite to see migration instructions.
+Dolt is the default storage backend. The legacy SQLite backend has been
+removed. Use --backend=sqlite to see migration instructions. Use
+--backend=doltlite for the embedded DoltLite backend.
 
 Use --database to specify an existing server database name, overriding the
 default prefix-based naming. This is useful when an external tool (e.g. an orchestrator)
@@ -3481,7 +3483,7 @@ bd init [flags]
       --agents-file string                             Custom filename for agent instructions (default: AGENTS.md)
       --agents-profile string                          AGENTS.md profile: 'minimal' (default, pointer to bd prime) or 'full' (complete command reference)
       --agents-template string                         Path to custom AGENTS.md template (overrides embedded default)
-      --backend string                                 Storage backend (default: dolt). --backend=sqlite prints deprecation notice.
+      --backend string                                 Storage backend (default: dolt; supported: dolt, doltlite). --backend=sqlite prints deprecation notice.
       --contributor                                    Run OSS contributor setup wizard
       --database string                                Use existing server database name (overrides prefix-based naming)
       --debug                                          Run the managed Dolt sql-server with --loglevel=debug and CPU profiling (--prof cpu). Persisted to config.yaml as dolt.debug. No effect on externally-managed servers.

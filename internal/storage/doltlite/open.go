@@ -45,11 +45,14 @@ func OpenSQL(ctx context.Context, dir, database, branch string) (*sql.DB, func()
 	// v0.11.5 libdoltlite sqlite3_open can fail with NOTADB when the file
 	// does not exist; pre-creating an empty file avoids the issue.
 	if _, err := os.Stat(dbFile); os.IsNotExist(err) {
+		// #nosec G304 -- dbFile is built under the caller-selected DoltLite data dir by buildDSN.
 		f, err := os.Create(dbFile)
 		if err != nil {
 			return nil, nil, fmt.Errorf("doltlite: create db file: %w", err)
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			return nil, nil, fmt.Errorf("doltlite: close db file: %w", err)
+		}
 	}
 	db, err := sql.Open(driverName, dbPath)
 	if err != nil {

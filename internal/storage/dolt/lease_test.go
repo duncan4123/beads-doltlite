@@ -280,9 +280,6 @@ func TestRowLockForcesConflictOnDisjointCellWrites(t *testing.T) {
 //   - no issue is ever a zombie: open with a lingering owner/lease, or closed
 //     with a lingering owner/lease
 func TestConcurrentHeartbeatReclaimClose(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping lease recovery race in short mode")
-	}
 	store, cleanup := setupConcurrentTestStore(t)
 	defer cleanup()
 	ctx, cancel := testContext(t)
