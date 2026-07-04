@@ -975,10 +975,6 @@ func TestSerializationConflictRetry(t *testing.T) {
 // =============================================================================
 
 func TestConcurrentWorkQueueDrain(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping work-queue drain test in short mode")
-	}
-
 	store, cleanup := setupConcurrentTestStore(t)
 	defer cleanup()
 

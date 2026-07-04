@@ -7,9 +7,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/steveyegge/beads/internal/storage"
+	"github.com/steveyegge/beads/internal/storage/doltutil"
 	"github.com/steveyegge/beads/internal/storage/issueops"
 	"github.com/steveyegge/beads/internal/storage/versioncontrolops"
 )
@@ -147,6 +149,9 @@ func (s *DoltliteStore) CommitMergeResolution(ctx context.Context, message strin
 }
 
 func (s *DoltliteStore) AddRemote(ctx context.Context, name, url string) error {
+	if err := validateDoltliteRemoteSyncURL(name, url); err != nil {
+		return err
+	}
 	return s.withDBWrite(ctx, func(db versioncontrolops.DBConn) error {
 		var existing string
 		err := db.QueryRowContext(ctx, "SELECT url FROM dolt_remotes WHERE name = ?", name).Scan(&existing)
@@ -385,6 +390,31 @@ func (s *DoltliteStore) ResolveConflicts(ctx context.Context, table string, stra
 
 const defaultRemote = "origin"
 
+var errDoltliteUnsupportedRemoteURL = errors.New("doltlite remote URL unsupported")
+
+func validateDoltliteRemoteSyncURL(remote, url string) error {
+	if strings.HasPrefix(url, "file://") || strings.HasPrefix(url, "http://") {
+		return nil
+	}
+	if doltutil.IsGitProtocolURL(url) {
+		return fmt.Errorf("%w: remote %q uses git protocol URL %q; DoltLite remote sync supports only file:// and http:// remotes. Use the Dolt backend for GitHub/git+ssh sync, or replace this remote with a DoltLite-supported URL", errDoltliteUnsupportedRemoteURL, remote, url)
+	}
+	return fmt.Errorf("%w: remote %q uses URL %q; DoltLite remote sync supports only file:// and http:// remotes", errDoltliteUnsupportedRemoteURL, remote, url)
+}
+
+func guardDoltliteRemoteSyncURL(ctx context.Context, db versioncontrolops.DBConn, remote string) error {
+	var url string
+	err := db.QueryRowContext(ctx, "SELECT url FROM dolt_remotes WHERE name = ?", remote).Scan(&url)
+	switch {
+	case err == nil:
+		return validateDoltliteRemoteSyncURL(remote, url)
+	case errors.Is(err, sql.ErrNoRows):
+		return nil // Preserve existing remote-not-found handling from dolt_push/dolt_pull.
+	default:
+		return fmt.Errorf("lookup remote %s: %w", remote, err)
+	}
+}
+
 func (s *DoltliteStore) RemoveRemote(ctx context.Context, name string) error {
 	return s.withDBWrite(ctx, func(db versioncontrolops.DBConn) error {
 		if _, err := db.ExecContext(ctx, "SELECT dolt_remote('remove', ?)", name); err != nil {
@@ -406,6 +436,9 @@ func (s *DoltliteStore) ListRemotes(ctx context.Context) ([]storage.RemoteInfo, 
 
 func (s *DoltliteStore) Push(ctx context.Context) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, defaultRemote); err != nil {
+			return err
+		}
 		_, err := db.ExecContext(ctx, "SELECT dolt_push(?, ?)", defaultRemote, s.branch)
 		return err
 	})
@@ -413,6 +446,9 @@ func (s *DoltliteStore) Push(ctx context.Context) error {
 
 func (s *DoltliteStore) Pull(ctx context.Context) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, defaultRemote); err != nil {
+			return err
+		}
 		_, err := db.ExecContext(ctx, "SELECT dolt_pull(?, ?)", defaultRemote, s.branch)
 		return err
 	})
@@ -420,6 +456,9 @@ func (s *DoltliteStore) Pull(ctx context.Context) error {
 
 func (s *DoltliteStore) ForcePush(ctx context.Context) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, defaultRemote); err != nil {
+			return err
+		}
 		_, err := db.ExecContext(ctx, "SELECT dolt_push(?, ?, '--force')", defaultRemote, s.branch)
 		return err
 	})
@@ -427,6 +466,9 @@ func (s *DoltliteStore) ForcePush(ctx context.Context) error {
 
 func (s *DoltliteStore) PushRemote(ctx context.Context, remote string, force bool) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, remote); err != nil {
+			return err
+		}
 		if force {
 			_, err := db.ExecContext(ctx, "SELECT dolt_push(?, ?, '--force')", remote, s.branch)
 			return err
@@ -438,6 +480,9 @@ func (s *DoltliteStore) PushRemote(ctx context.Context, remote string, force boo
 
 func (s *DoltliteStore) PullRemote(ctx context.Context, remote string) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, remote); err != nil {
+			return err
+		}
 		_, err := db.ExecContext(ctx, "SELECT dolt_pull(?, ?)", remote, s.branch)
 		return err
 	})
@@ -445,6 +490,9 @@ func (s *DoltliteStore) PullRemote(ctx context.Context, remote string) error {
 
 func (s *DoltliteStore) Fetch(ctx context.Context, peer string) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, peer); err != nil {
+			return err
+		}
 		_, err := db.ExecContext(ctx, "SELECT dolt_fetch(?)", peer)
 		return err
 	})
@@ -452,6 +500,9 @@ func (s *DoltliteStore) Fetch(ctx context.Context, peer string) error {
 
 func (s *DoltliteStore) PushTo(ctx context.Context, peer string) error {
 	return s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, peer); err != nil {
+			return err
+		}
 		_, err := db.ExecContext(ctx, "SELECT dolt_push(?, ?)", peer, s.branch)
 		return err
 	})
@@ -464,6 +515,9 @@ func (s *DoltliteStore) PullFrom(ctx context.Context, peer string) ([]storage.Co
 
 	var conflicts []storage.Conflict
 	err := s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		if err := guardDoltliteRemoteSyncURL(ctx, db, peer); err != nil {
+			return err
+		}
 		if _, pullErr := db.ExecContext(ctx, "SELECT dolt_pull(?, ?)", peer, s.branch); pullErr != nil {
 			c, conflictErr := versioncontrolops.GetConflicts(ctx, db)
 			if conflictErr == nil && len(c) > 0 {

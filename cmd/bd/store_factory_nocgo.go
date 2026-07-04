@@ -40,6 +40,10 @@ func newDoltStore(ctx context.Context, cfg *dolt.Config) (storage.DoltStorage, e
 	return dolt.New(ctx, cfg)
 }
 
+func newDoltliteStore(_ context.Context, _, _ string) (storage.DoltStorage, error) {
+	return nil, fmt.Errorf("%s", nocgoDoltliteErrMsg)
+}
+
 // acquireEmbeddedLock returns a no-op lock in non-CGO builds.
 func acquireEmbeddedLock(_ string, _ bool) (util.Unlocker, error) {
 	return util.NoopLock{}, nil
@@ -101,3 +105,7 @@ Three options:
        curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
 See docs/INSTALLING.md for the full comparison.`
+
+const nocgoDoltliteErrMsg = `DoltLite requires a CGO build, but this bd binary was built with CGO_ENABLED=0.
+
+Build bd with CGO_ENABLED=1 and libdoltlite available, or use the Dolt backend for non-CGO builds.`

@@ -511,6 +511,7 @@ func migrateLegacyDoltliteWispDependencies(ctx context.Context, tx *sql.Tx) erro
 	metadataExpr := doltliteLegacyColumnValue(columns, "metadata", "'{}'")
 	threadIDExpr := doltliteLegacyColumnValue(columns, "thread_id", "''")
 
+	// #nosec G201 -- interpolated fragments are fixed schema identifiers and expressions from this migration.
 	copySQL := fmt.Sprintf(`
 INSERT OR IGNORE INTO %[1]s (
     id, issue_id, depends_on_issue_id, depends_on_wisp_id, depends_on_external,
