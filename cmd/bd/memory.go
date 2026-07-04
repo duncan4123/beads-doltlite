@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -115,10 +116,11 @@ Examples:
 		// Passing --key states write intent and bypasses both branches.
 		if memoryKeyFlag == "" && slugify(insight) == insight {
 			if existing != "" {
+				recalledContent, _, _, _ := unwrapMemory(existing)
 				if jsonOutput {
 					return outputJSON(map[string]interface{}{
 						"key":    key,
-						"value":  existing,
+						"value":  recalledContent,
 						"found":  true,
 						"action": "recalled",
 					})
@@ -126,7 +128,7 @@ Examples:
 				fmt.Fprintf(os.Stderr,
 					"(recalled %q -- a bare existing key READS. To overwrite: `bd remember \"<new content>\" --key %s`)\n",
 					key, key)
-				fmt.Printf("%s\n", existing)
+				fmt.Printf("%s\n", recalledContent)
 				return nil
 			}
 			return HandleErrorRespectJSON(
@@ -136,16 +138,26 @@ Examples:
 				key, insight, key)
 		}
 
-		if err := store.SetConfig(ctx, storageKey, insight); err != nil {
+		// Carry created/updated timestamps inside the value (the config KV table
+		// has no timestamp columns). Preserve the original created_at across an
+		// update; always refresh updated_at.
+		now := time.Now().UTC().Format(time.RFC3339)
+		createdAt := now
+		if _, prevCreated, _, dated := unwrapMemory(existing); dated && prevCreated != "" {
+			createdAt = prevCreated
+		}
+		if err := store.SetConfig(ctx, storageKey, wrapMemory(insight, createdAt, now)); err != nil {
 			return HandleErrorRespectJSON("storing memory: %v", err)
 		}
 		commandDidWrite.Store(true)
 
 		if jsonOutput {
 			return outputJSON(map[string]string{
-				"key":    key,
-				"value":  insight,
-				"action": strings.ToLower(verb),
+				"key":     key,
+				"value":   insight,
+				"action":  strings.ToLower(verb),
+				"created": createdAt,
+				"updated": now,
 			})
 		}
 		fmt.Printf("%s [%s]: %s\n", verb, key, truncateMemory(insight, 80))
@@ -199,22 +211,34 @@ Examples:
 		if len(args) > 0 {
 			search = strings.ToLower(args[0])
 		}
-		if search != "" {
-			filtered := make(map[string]string)
-			for k, v := range memories {
-				if strings.Contains(strings.ToLower(k), search) ||
-					strings.Contains(strings.ToLower(v), search) {
-					filtered[k] = v
-				}
+
+		type memRow struct {
+			key, content, updated string
+			dated                 bool
+		}
+		rows := make([]memRow, 0, len(memories))
+		for k, raw := range memories {
+			content, _, updated, dated := unwrapMemory(raw)
+			// Match on the unwrapped content so envelope JSON never leaks into
+			// search behavior.
+			if search != "" &&
+				!strings.Contains(strings.ToLower(k), search) &&
+				!strings.Contains(strings.ToLower(content), search) {
+				continue
 			}
-			memories = filtered
+			rows = append(rows, memRow{key: k, content: content, updated: updated, dated: dated})
 		}
 
 		if jsonOutput {
-			return outputJSON(memories)
+			// Emit unwrapped content (never the raw envelope) keyed by name.
+			out := make(map[string]string, len(rows))
+			for _, r := range rows {
+				out[r.key] = r.content
+			}
+			return outputJSON(out)
 		}
 
-		if len(memories) == 0 {
+		if len(rows) == 0 {
 			if search != "" {
 				fmt.Printf("No memories matching %q\n", search)
 			} else {
@@ -223,22 +247,18 @@ Examples:
 			return nil
 		}
 
-		keys := make([]string, 0, len(memories))
-		for k := range memories {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
+		sort.Slice(rows, func(i, j int) bool { return rows[i].key < rows[j].key })
 
 		if search != "" {
 			fmt.Printf("Memories matching %q:\n\n", search)
 		} else {
-			fmt.Printf("Memories (%d):\n\n", len(memories))
+			fmt.Printf("Memories (%d):\n\n", len(rows))
 		}
-		for _, k := range keys {
-			v := memories[k]
-			fmt.Printf("  %s\n", k)
-			fmt.Printf("    %s\n\n", truncateMemory(v, 120))
+		for _, r := range rows {
+			fmt.Printf("  %s  %s\n", r.key, memoryMetaSuffix(r.updated, r.dated))
+			fmt.Printf("    %s\n\n", truncateMemory(r.content, 120))
 		}
+		fmt.Println("Full text: bd recall <key>   Update: bd remember \"...\" --key <key>   Remove: bd forget <key>")
 		return nil
 	},
 }
@@ -303,7 +323,8 @@ Examples:
 				"deleted": "true",
 			})
 		}
-		fmt.Printf("Forgot [%s]: %s\n", key, truncateMemory(existing, 80))
+		forgottenContent, _, _, _ := unwrapMemory(existing)
+		fmt.Printf("Forgot [%s]: %s\n", key, truncateMemory(forgottenContent, 80))
 		return nil
 	},
 }
@@ -342,12 +363,18 @@ Examples:
 			return HandleErrorRespectJSON("recalling memory: %v", err)
 		}
 
+		content, created, updated, dated := unwrapMemory(value)
 		if jsonOutput {
-			if jerr := outputJSON(map[string]interface{}{
+			payload := map[string]interface{}{
 				"key":   key,
-				"value": value,
+				"value": content,
 				"found": value != "",
-			}); jerr != nil {
+			}
+			if dated {
+				payload["created"] = created
+				payload["updated"] = updated
+			}
+			if jerr := outputJSON(payload); jerr != nil {
 				return jerr
 			}
 			if value == "" {
@@ -359,7 +386,7 @@ Examples:
 			fmt.Fprintf(os.Stderr, "No memory with key %q\n", key)
 			return SilentExit()
 		}
-		fmt.Printf("%s\n", value)
+		fmt.Printf("%s\n", content)
 		return nil
 	},
 }
