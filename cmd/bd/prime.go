@@ -347,38 +347,64 @@ func formatMemoriesForPrime(compact bool) string {
 		return ""
 	}
 
+	// primeMemoryCap bounds how many memories are injected in full. The rest are
+	// summarized so an uncapped dump can't overflow a host's tool-result cap and
+	// silently drop the freshest hand-offs.
+	const primeMemoryCap = 25
+
 	fullPrefix := kvPrefix + memoryPrefix
-	var keys []string
-	memories := make(map[string]string)
-	for k, v := range allConfig {
-		if strings.HasPrefix(k, fullPrefix) {
-			userKey := strings.TrimPrefix(k, fullPrefix)
-			memories[userKey] = v
-			keys = append(keys, userKey)
-		}
+	type primeMem struct {
+		key, content, updated string
+		dated                 bool
 	}
-	if len(memories) == 0 {
+	var mems []primeMem
+	for k, v := range allConfig {
+		if !strings.HasPrefix(k, fullPrefix) {
+			continue
+		}
+		userKey := strings.TrimPrefix(k, fullPrefix)
+		content, _, updated, dated := unwrapMemory(v)
+		mems = append(mems, primeMem{key: userKey, content: content, updated: updated, dated: dated})
+	}
+	if len(mems) == 0 {
 		return ""
 	}
-	sort.Strings(keys)
+	// Newest first so the freshest, most action-critical memories survive any
+	// host truncation of the injected block; undated legacy memories sort last.
+	// RFC3339 timestamps sort chronologically as plain strings.
+	sort.Slice(mems, func(i, j int) bool {
+		if mems[i].updated != mems[j].updated {
+			return mems[i].updated > mems[j].updated
+		}
+		return mems[i].key < mems[j].key
+	})
+
+	shown := mems
+	overflow := 0
+	if len(mems) > primeMemoryCap {
+		shown = mems[:primeMemoryCap]
+		overflow = len(mems) - primeMemoryCap
+	}
 
 	var sb strings.Builder
 	if compact {
 		sb.WriteString("\n## Memories\n")
-		for _, k := range keys {
-			// Compact: one line per memory
-			v := strings.ReplaceAll(memories[k], "\n", " ")
+		for _, m := range shown {
+			v := strings.ReplaceAll(m.content, "\n", " ")
 			if len(v) > 150 {
 				v = v[:147] + "..."
 			}
-			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", k, v))
+			sb.WriteString(fmt.Sprintf("- **%s** %s: %s\n", m.key, memoryMetaSuffix(m.updated, m.dated), v))
 		}
 	} else {
-		sb.WriteString(fmt.Sprintf("\n## Persistent Memories (%d)\n\n", len(memories)))
-		sb.WriteString("Stored via `bd remember`. Update in place with `bd remember --key <key> \"new content\"`. Search with `bd memories <keyword>`. Remove with `bd forget <key>`.\n\n")
-		for _, k := range keys {
-			sb.WriteString(fmt.Sprintf("### %s\n%s\n\n", k, memories[k]))
+		sb.WriteString(fmt.Sprintf("\n## Persistent Memories (%d)\n\n", len(mems)))
+		sb.WriteString("Newest first. Stored via `bd remember`. Update in place with `bd remember --key <key> \"new content\"`. Search with `bd memories <keyword>`. Remove with `bd forget <key>`.\n\n")
+		for _, m := range shown {
+			sb.WriteString(fmt.Sprintf("### %s %s\n%s\n\n", m.key, memoryMetaSuffix(m.updated, m.dated), m.content))
 		}
+	}
+	if overflow > 0 {
+		sb.WriteString(fmt.Sprintf("\n_+%d older memories not shown (newest %d shown). List all with dates via `bd memories`, or fetch one with `bd recall <key>`._\n", overflow, primeMemoryCap))
 	}
 	return sb.String()
 }
