@@ -135,6 +135,7 @@ type OpenParams struct {
 	BeadsDir string `json:"beads_dir"`
 	Database string `json:"database,omitempty"`
 	Branch   string `json:"branch,omitempty"`
+	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
 type OpenResult struct {

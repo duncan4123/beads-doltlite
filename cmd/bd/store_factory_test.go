@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,90 @@ func TestEmbeddedOpen_EmptyDatabaseRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "database name must not be empty") {
 		t.Errorf("unexpected error: %v", err)
 	}
+}
+
+func TestNewDoltStoreFromConfig_IgnoresCommittedPluginCommand(t *testing.T) {
+	beadsDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "executed")
+	malicious := filepath.Join(t.TempDir(), "malicious-plugin")
+	if err := os.WriteFile(malicious, []byte("#!/bin/sh\ntouch "+marker+"\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write malicious plugin: %v", err)
+	}
+	cfg := &configfile.Config{
+		Backend:              "doltlite",
+		Database:             "doltlite",
+		DoltDatabase:         "beads",
+		BackendPluginCommand: malicious,
+		BackendPluginArgs:    []string{"serve"},
+	}
+	if err := cfg.Save(beadsDir); err != nil {
+		t.Fatalf("save metadata: %v", err)
+	}
+
+	_, err := newDoltStoreFromConfig(t.Context(), beadsDir)
+	if err == nil {
+		t.Fatal("newDoltStoreFromConfig succeeded, want missing trusted command error")
+	}
+	if !strings.Contains(err.Error(), "no trusted local command") {
+		t.Fatalf("error = %v, want no trusted local command", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("committed backend_plugin_command was executed; marker stat err=%v", statErr)
+	}
+}
+
+func TestNewReadOnlyStoreFromConfig_PluginUsesLocalTrustAndReadOnly(t *testing.T) {
+	beadsDir := t.TempDir()
+	capture := filepath.Join(t.TempDir(), "open.jsonl")
+	plugin := writeStoreFactoryPluginHelper(t, capture)
+	cfg := &configfile.Config{
+		Backend:      "doltlite",
+		Database:     "doltlite",
+		DoltDatabase: "beads",
+	}
+	if err := cfg.Save(beadsDir); err != nil {
+		t.Fatalf("save metadata: %v", err)
+	}
+	if _, err := saveBackendPluginTrust(beadsDir, "doltlite", plugin, []string{"serve"}); err != nil {
+		t.Fatalf("saveBackendPluginTrust: %v", err)
+	}
+
+	store, err := newReadOnlyStoreFromConfig(t.Context(), beadsDir)
+	if err != nil {
+		t.Fatalf("newReadOnlyStoreFromConfig: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	if !strings.Contains(string(data), `"read_only":true`) {
+		t.Fatalf("open params did not include read_only=true:\n%s", data)
+	}
+}
+
+func writeStoreFactoryPluginHelper(t *testing.T, capture string) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "plugin-helper")
+	body := fmt.Sprintf(`#!/bin/sh
+capture=%q
+printf '{"ok":true,"result":{"protocol":"beads.backend.v1alpha1","backend":"doltlite"}}\n'
+while IFS= read -r line; do
+  printf '%%s\n' "$line" >> "$capture"
+  case "$line" in
+    *'"method":"open"'*) printf '{"id":"1","ok":true,"result":{"session_id":"s"}}\n' ;;
+    *'"method":"close"'*) printf '{"id":"2","ok":true,"result":{}}\n'; exit 0 ;;
+    *) printf '{"ok":false,"error":{"code":"unknown_method","message":"unexpected"}}\n' ;;
+  esac
+done
+`, capture)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write plugin helper: %v", err)
+	}
+	return script
 }
 
 // TestNewDoltStoreFromConfig_HyphenatedDBName verifies that

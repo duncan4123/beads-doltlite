@@ -11,6 +11,7 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/metrics"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -23,11 +24,12 @@ var backendCmd = &cobra.Command{
 	Use:     "backend",
 	GroupID: "setup",
 	Short:   "Manage storage backend configuration",
-	Long: `Manage storage backend configuration stored in .beads/metadata.json.
+	Long: `Manage storage backend configuration.
 
 Backend plugins are external processes launched by bd. Installing a plugin
-records the backend name, plugin executable, and plugin arguments in metadata so
-future bd commands open the backend through the plugin-process adapter.`,
+records the backend name in .beads/metadata.json and stores the trusted plugin
+executable in .beads/config.local.yaml so executable trust does not travel with
+committed metadata.`,
 }
 
 var backendInstallCmd = &cobra.Command{
@@ -66,6 +68,7 @@ var backendInstallCmd = &cobra.Command{
 			fmt.Printf("  args: %s\n", strings.Join(result.Args, " "))
 		}
 		fmt.Printf("  metadata: %s\n", result.MetadataPath)
+		fmt.Printf("  trust: %s\n", result.TrustPath)
 		return nil
 	},
 }
@@ -82,6 +85,7 @@ type backendInstallResult struct {
 	Command      string   `json:"command"`
 	Args         []string `json:"args,omitempty"`
 	MetadataPath string   `json:"metadata_path"`
+	TrustPath    string   `json:"trust_path"`
 }
 
 func installBackendPlugin(beadsDir string, input backendInstallInput) (*backendInstallResult, error) {
@@ -118,13 +122,17 @@ func installBackendPlugin(beadsDir string, input backendInstallInput) (*backendI
 	if strings.TrimSpace(cfg.Database) == "" || cfg.Database == "beads.db" {
 		cfg.Database = backend
 	}
-	cfg.BackendPluginCommand = resolvedCommand
-	cfg.BackendPluginArgs = args
+	cfg.BackendPluginCommand = ""
+	cfg.BackendPluginArgs = nil
 	if strings.TrimSpace(cfg.DoltDatabase) == "" {
 		cfg.DoltDatabase = configfile.DefaultDoltDatabase
 	}
 	if err := cfg.Save(beadsDir); err != nil {
 		return nil, fmt.Errorf("saving metadata.json: %w", err)
+	}
+	trustPath, err := saveBackendPluginTrust(beadsDir, backend, resolvedCommand, args)
+	if err != nil {
+		return nil, err
 	}
 
 	return &backendInstallResult{
@@ -132,7 +140,38 @@ func installBackendPlugin(beadsDir string, input backendInstallInput) (*backendI
 		Command:      resolvedCommand,
 		Args:         args,
 		MetadataPath: configfile.ConfigPath(beadsDir),
+		TrustPath:    trustPath,
 	}, nil
+}
+
+func saveBackendPluginTrust(beadsDir, backend, command string, args []string) (string, error) {
+	path := filepath.Join(beadsDir, configfile.BackendPluginLocalConfigFileName)
+	existing := make(map[string]interface{})
+	if data, err := os.ReadFile(path); err == nil {
+		if err := yaml.Unmarshal(data, &existing); err != nil {
+			return "", fmt.Errorf("parsing %s: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	backendPlugins, ok := existing["backend_plugins"].(map[string]interface{})
+	if !ok {
+		backendPlugins = make(map[string]interface{})
+		existing["backend_plugins"] = backendPlugins
+	}
+	entry := map[string]interface{}{"command": command}
+	if len(args) > 0 {
+		entry["args"] = append([]string(nil), args...)
+	}
+	backendPlugins[backend] = entry
+	out, err := yaml.Marshal(existing)
+	if err != nil {
+		return "", fmt.Errorf("marshaling %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return "", fmt.Errorf("writing %s: %w", path, err)
+	}
+	return path, nil
 }
 
 func resolveBackendPluginCommand(command string) (string, error) {

@@ -94,21 +94,28 @@ func acquireEmbeddedLock(beadsDir string, serverMode bool) (util.Unlocker, error
 // auto-sanitized to underscores and the fix is persisted to metadata.json.
 func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
-	if err == nil && cfg != nil && cfg.BackendPluginCommand != "" {
+	providerName := configfile.BackendDolt
+	if cfg != nil {
+		providerName = cfg.GetBackend()
+	}
+	if providerName != configfile.BackendDolt {
+		pluginCfg, err := configfile.ResolveBackendPluginConfig(beadsDir, providerName)
+		if err != nil {
+			return nil, err
+		}
+		if pluginCfg == nil {
+			return nil, fmt.Errorf("backend plugin %q is configured in metadata.json but no trusted local command was found; run 'bd backend install %s --command <path>' or set BEADS_BACKEND_PLUGIN_COMMAND", providerName, providerName)
+		}
 		return pluginprocess.Open(ctx, pluginprocess.OpenOptions{
 			Config: pluginprocess.Config{
-				Backend: cfg.GetBackend(),
-				Command: cfg.BackendPluginCommand,
-				Args:    cfg.BackendPluginArgs,
+				Backend: providerName,
+				Command: pluginCfg.Command,
+				Args:    pluginCfg.Args,
 			},
 			BeadsDir: beadsDir,
 			Database: cfg.GetDoltDatabase(),
 			Branch:   "main",
 		})
-	}
-	providerName := configfile.BackendDolt
-	if cfg != nil {
-		providerName = cfg.GetBackend()
 	}
 	provider, lookupErr := backend.MustLookup(providerName)
 	if lookupErr != nil {
@@ -198,21 +205,29 @@ func migrateHyphenatedDB(beadsDir string, cfg *configfile.Config, oldName, newNa
 // hydration from mutating foreign projects (GH#3231).
 func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
-	if err == nil && cfg != nil && cfg.BackendPluginCommand != "" {
+	providerName := configfile.BackendDolt
+	if cfg != nil {
+		providerName = cfg.GetBackend()
+	}
+	if providerName != configfile.BackendDolt {
+		pluginCfg, err := configfile.ResolveBackendPluginConfig(beadsDir, providerName)
+		if err != nil {
+			return nil, err
+		}
+		if pluginCfg == nil {
+			return nil, fmt.Errorf("backend plugin %q is configured in metadata.json but no trusted local command was found; run 'bd backend install %s --command <path>' or set BEADS_BACKEND_PLUGIN_COMMAND", providerName, providerName)
+		}
 		return pluginprocess.Open(ctx, pluginprocess.OpenOptions{
 			Config: pluginprocess.Config{
-				Backend: cfg.GetBackend(),
-				Command: cfg.BackendPluginCommand,
-				Args:    cfg.BackendPluginArgs,
+				Backend: providerName,
+				Command: pluginCfg.Command,
+				Args:    pluginCfg.Args,
 			},
 			BeadsDir: beadsDir,
 			Database: cfg.GetDoltDatabase(),
 			Branch:   "main",
+			ReadOnly: true,
 		})
-	}
-	providerName := configfile.BackendDolt
-	if cfg != nil {
-		providerName = cfg.GetBackend()
 	}
 	provider, lookupErr := backend.MustLookup(providerName)
 	if lookupErr != nil {

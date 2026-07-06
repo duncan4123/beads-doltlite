@@ -20,7 +20,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/subosito/gotenv"
 
-	"github.com/steveyegge/beads/internal/backend/pluginprocess"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
@@ -1113,17 +1112,12 @@ var rootCmd = &cobra.Command{
 		// Removing them WILL cause unrecoverable data corruption and data loss.
 		// Dolt manages these files itself; external interference is never safe.
 
-		if cfg != nil && cfg.BackendPluginCommand != "" {
-			store, err = pluginprocess.Open(rootCtx, pluginprocess.OpenOptions{
-				Config: pluginprocess.Config{
-					Backend: cfg.GetBackend(),
-					Command: cfg.BackendPluginCommand,
-					Args:    cfg.BackendPluginArgs,
-				},
-				BeadsDir: beadsDir,
-				Database: doltCfg.Database,
-				Branch:   "main",
-			})
+		if cfg != nil && cfg.GetBackend() != configfile.BackendDolt {
+			if useReadOnly {
+				store, err = newReadOnlyStoreFromConfig(rootCtx, beadsDir)
+			} else {
+				store, err = newDoltStoreFromConfig(rootCtx, beadsDir)
+			}
 		} else {
 			store, err = newDoltStore(rootCtx, doltCfg)
 		}

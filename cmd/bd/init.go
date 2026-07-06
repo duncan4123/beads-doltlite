@@ -1872,7 +1872,22 @@ func checkExistingBeadsDataAt(beadsDir string, prefix string) error {
 		return nil // No .beads directory, safe to init
 	}
 
-	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendDolt {
+	if cfg, err := configfile.Load(beadsDir); err == nil && cfg != nil {
+		if cfg.GetBackend() != configfile.BackendDolt {
+			return alreadyInitialized(`
+%s Found existing %s backend configuration: %s
+
+This workspace is already initialized.
+
+To use the existing database:
+  Just run bd commands normally (e.g., %s)
+
+If the backend plugin is missing:
+  bd backend install %s --command <path>
+
+Aborting.`, ui.RenderWarn("⚠"), cfg.GetBackend(), beadsDir, ui.RenderAccent("bd list"), cfg.GetBackend())
+		}
+
 		if cfg.IsDoltProxiedServerMode() {
 			proxiedRoot, rootErr := resolveProxiedServerRootPath(beadsDir)
 			if rootErr != nil {

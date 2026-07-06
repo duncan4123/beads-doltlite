@@ -141,7 +141,7 @@ func TestFindDatabasePath_CwdPriority(t *testing.T) {
 	}
 }
 
-func TestFindDatabasePathRecognizesDoltlitePluginDirectory(t *testing.T) {
+func TestFindDatabasePathRecognizesPluginBackendDirectory(t *testing.T) {
 	origBeadsDir := os.Getenv("BEADS_DIR")
 	origBeadsDB := os.Getenv("BEADS_DB")
 	t.Cleanup(func() {
@@ -160,11 +160,10 @@ func TestFindDatabasePathRecognizesDoltlitePluginDirectory(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	beadsDir := filepath.Join(tmpDir, ".beads")
-	doltliteDir := filepath.Join(beadsDir, "doltlite")
-	if err := os.MkdirAll(doltliteDir, 0o755); err != nil {
+	if err := os.MkdirAll(beadsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{"backend":"doltlite","database":"doltlite","dolt_database":"test","backend_plugin_command":"/bin/true"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(beadsDir, "metadata.json"), []byte(`{"backend":"postgres","database":"test","postgres_database":"beads","postgres_schema":"test"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(beadsDir, "config.yaml"), []byte("issue_prefix: test\n"), 0o644); err != nil {
@@ -174,12 +173,12 @@ func TestFindDatabasePathRecognizesDoltlitePluginDirectory(t *testing.T) {
 
 	result := FindDatabasePath()
 	if result == "" {
-		t.Fatal("FindDatabasePath() returned empty for plugin-backed DoltLite scope")
+		t.Fatal("FindDatabasePath() returned empty for plugin-backed scope")
 	}
 	resultResolved, _ := filepath.EvalSymlinks(result)
-	wantResolved, _ := filepath.EvalSymlinks(doltliteDir)
+	wantResolved, _ := filepath.EvalSymlinks(beadsDir)
 	if resultResolved != wantResolved {
-		t.Fatalf("FindDatabasePath() = %q, want %q", result, doltliteDir)
+		t.Fatalf("FindDatabasePath() = %q, want %q", result, beadsDir)
 	}
 }
 

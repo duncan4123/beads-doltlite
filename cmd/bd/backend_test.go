@@ -9,7 +9,7 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 )
 
-func TestInstallBackendPluginWritesMetadata(t *testing.T) {
+func TestInstallBackendPluginWritesMetadataAndLocalTrust(t *testing.T) {
 	beadsDir := filepath.Join(t.TempDir(), ".beads")
 	if err := os.MkdirAll(beadsDir, 0o755); err != nil {
 		t.Fatalf("mkdir beads dir: %v", err)
@@ -41,15 +41,31 @@ func TestInstallBackendPluginWritesMetadata(t *testing.T) {
 	if cfg.Database != "doltlite" {
 		t.Fatalf("database = %q, want doltlite", cfg.Database)
 	}
-	if cfg.BackendPluginCommand != plugin {
-		t.Fatalf("backend_plugin_command = %q, want %q", cfg.BackendPluginCommand, plugin)
+	if cfg.BackendPluginCommand != "" {
+		t.Fatalf("backend_plugin_command = %q, want empty because executable trust is local-only", cfg.BackendPluginCommand)
 	}
 	wantArgs := []string{"--trace", "/tmp/backend-plugin.jsonl", "serve"}
-	if !reflect.DeepEqual(cfg.BackendPluginArgs, wantArgs) {
-		t.Fatalf("backend_plugin_args = %#v, want %#v", cfg.BackendPluginArgs, wantArgs)
+	if len(cfg.BackendPluginArgs) != 0 {
+		t.Fatalf("backend_plugin_args = %#v, want empty because executable trust is local-only", cfg.BackendPluginArgs)
 	}
 	if cfg.DoltDatabase != configfile.DefaultDoltDatabase {
 		t.Fatalf("dolt_database = %q, want %q", cfg.DoltDatabase, configfile.DefaultDoltDatabase)
+	}
+	trusted, err := configfile.ResolveBackendPluginConfig(beadsDir, "doltlite")
+	if err != nil {
+		t.Fatalf("ResolveBackendPluginConfig: %v", err)
+	}
+	if trusted == nil {
+		t.Fatal("ResolveBackendPluginConfig returned nil, want local trust config")
+	}
+	if trusted.Command != plugin {
+		t.Fatalf("trusted command = %q, want %q", trusted.Command, plugin)
+	}
+	if !reflect.DeepEqual(trusted.Args, wantArgs) {
+		t.Fatalf("trusted args = %#v, want %#v", trusted.Args, wantArgs)
+	}
+	if trusted.Source != result.TrustPath {
+		t.Fatalf("trusted source = %q, want %q", trusted.Source, result.TrustPath)
 	}
 }
 
@@ -91,8 +107,15 @@ func TestInstallBackendPluginPreservesExistingDatabaseFields(t *testing.T) {
 		t.Fatalf("project_id = %q, want project-1", got.ProjectID)
 	}
 	wantArgs := []string{"--log-level", "debug", "serve"}
-	if !reflect.DeepEqual(got.BackendPluginArgs, wantArgs) {
-		t.Fatalf("backend_plugin_args = %#v, want %#v", got.BackendPluginArgs, wantArgs)
+	if len(got.BackendPluginArgs) != 0 {
+		t.Fatalf("backend_plugin_args = %#v, want empty because executable trust is local-only", got.BackendPluginArgs)
+	}
+	trusted, err := configfile.ResolveBackendPluginConfig(beadsDir, "doltlite")
+	if err != nil {
+		t.Fatalf("ResolveBackendPluginConfig: %v", err)
+	}
+	if trusted == nil || !reflect.DeepEqual(trusted.Args, wantArgs) {
+		t.Fatalf("trusted plugin args = %#v, want %#v", trusted, wantArgs)
 	}
 }
 

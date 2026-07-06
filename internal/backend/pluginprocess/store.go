@@ -3,6 +3,7 @@ package pluginprocess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -20,11 +21,10 @@ type OpenOptions struct {
 	BeadsDir string
 	Database string
 	Branch   string
+	ReadOnly bool
 }
 
 type Store struct {
-	storage.DoltStorage
-
 	client    *Client
 	sessionID string
 	closeOnce sync.Once
@@ -40,6 +40,7 @@ func Open(ctx context.Context, opts OpenOptions) (*Store, error) {
 		BeadsDir: opts.BeadsDir,
 		Database: opts.Database,
 		Branch:   opts.Branch,
+		ReadOnly: opts.ReadOnly,
 	}, &opened); err != nil {
 		_ = client.Close()
 		return nil, err
@@ -447,13 +448,9 @@ func (s *Store) SearchIssues(ctx context.Context, query string, filter types.Iss
 }
 
 func (s *Store) SearchIssuesWithCounts(ctx context.Context, query string, filter types.IssueFilter) ([]*types.IssueWithCounts, error) {
-	issues, err := s.SearchIssues(ctx, query, filter)
-	if err != nil {
+	var out []*types.IssueWithCounts
+	if err := s.client.request(ctx, "search_issues_with_counts", searchIssuesParams{SessionID: s.sessionID, Query: query, Filter: filter}, &out); err != nil {
 		return nil, err
-	}
-	out := make([]*types.IssueWithCounts, 0, len(issues))
-	for _, issue := range issues {
-		out = append(out, &types.IssueWithCounts{Issue: issue})
 	}
 	return out, nil
 }
@@ -1046,13 +1043,9 @@ func (s *Store) SlotClear(ctx context.Context, issueID, key, actor string) error
 }
 
 func (s *Store) GetReadyWorkWithCounts(ctx context.Context, filter types.WorkFilter) ([]*types.IssueWithCounts, error) {
-	issues, err := s.GetReadyWork(ctx, filter)
-	if err != nil {
+	var out []*types.IssueWithCounts
+	if err := s.client.request(ctx, "ready_work_with_counts", readyWorkParams{SessionID: s.sessionID, Filter: filter}, &out); err != nil {
 		return nil, err
-	}
-	out := make([]*types.IssueWithCounts, 0, len(issues))
-	for _, issue := range issues {
-		out = append(out, &types.IssueWithCounts{Issue: issue})
 	}
 	return out, nil
 }
@@ -1386,4 +1379,8 @@ func (s *Store) SyncStatus(ctx context.Context, peer string) (*storage.SyncStatu
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (s *Store) Sync(ctx context.Context, peer string, strategy string) (*storage.SyncResult, error) {
+	return nil, fmt.Errorf("backend plugin %q does not support sync(peer=%q, strategy=%q)", s.client.Hello().Backend, peer, strategy)
 }

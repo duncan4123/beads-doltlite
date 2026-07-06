@@ -22,6 +22,7 @@ func TestStoreForwardsBasicMethods(t *testing.T) {
 		BeadsDir: "/tmp/beads",
 		Database: "beads",
 		Branch:   "main",
+		ReadOnly: true,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -78,6 +79,23 @@ func TestStoreForwardsBasicMethods(t *testing.T) {
 	if len(ready) != 1 || ready[0].ID != "bd-1" {
 		t.Fatalf("GetReadyWork = %#v, want bd-1", ready)
 	}
+	withCounts, err := store.SearchIssuesWithCounts(ctx, "", types.IssueFilter{})
+	if err != nil {
+		t.Fatalf("SearchIssuesWithCounts: %v", err)
+	}
+	if len(withCounts) != 1 || withCounts[0].Issue.ID != "bd-1" || withCounts[0].DependencyCount != 2 {
+		t.Fatalf("SearchIssuesWithCounts = %#v, want bd-1 with dependency count", withCounts)
+	}
+	readyWithCounts, err := store.GetReadyWorkWithCounts(ctx, types.WorkFilter{})
+	if err != nil {
+		t.Fatalf("GetReadyWorkWithCounts: %v", err)
+	}
+	if len(readyWithCounts) != 1 || readyWithCounts[0].Issue.ID != "bd-1" || readyWithCounts[0].CommentCount != 3 {
+		t.Fatalf("GetReadyWorkWithCounts = %#v, want bd-1 with comment count", readyWithCounts)
+	}
+	if _, err := store.Sync(ctx, "origin", "merge"); err == nil {
+		t.Fatal("Sync succeeded, want unsupported error")
+	}
 	if err := store.Commit(ctx, "test commit"); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -116,7 +134,7 @@ func handleTestRequest(req request) response {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			return testError(req.ID, "bad_params", err)
 		}
-		if p.BeadsDir != "/tmp/beads" || p.Database != "beads" || p.Branch != "main" {
+		if p.BeadsDir != "/tmp/beads" || p.Database != "beads" || p.Branch != "main" || !p.ReadOnly {
 			return testError(req.ID, "bad_open", fmt.Errorf("%+v", p))
 		}
 		return testOK(req.ID, openResult{SessionID: "session-1"})
@@ -136,6 +154,10 @@ func handleTestRequest(req request) response {
 		return testOK(req.ID, &types.Issue{ID: "bd-1", Title: "plugin issue", Status: types.StatusOpen})
 	case "search_issues", "ready_work":
 		return testOK(req.ID, []*types.Issue{{ID: "bd-1", Title: "plugin issue", Status: types.StatusOpen}})
+	case "search_issues_with_counts":
+		return testOK(req.ID, []*types.IssueWithCounts{{Issue: &types.Issue{ID: "bd-1", Title: "plugin issue", Status: types.StatusOpen}, DependencyCount: 2}})
+	case "ready_work_with_counts":
+		return testOK(req.ID, []*types.IssueWithCounts{{Issue: &types.Issue{ID: "bd-1", Title: "plugin issue", Status: types.StatusOpen}, CommentCount: 3}})
 	case "add_label", "get_labels":
 		return testOK(req.ID, []string{"plugin"})
 	case "commit":

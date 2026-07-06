@@ -19,9 +19,10 @@ type Config struct {
 	Database string `json:"database"`
 	Backend  string `json:"backend,omitempty"` // Deprecated: always "dolt". Kept for JSON compat.
 
-	// Backend plugin configuration. When BackendPluginCommand is set, command
-	// code can open the configured backend through an external plugin process
-	// instead of an in-process provider.
+	// Deprecated backend plugin command fields. These remain readable for JSON
+	// compatibility, but bd must not execute commands from metadata.json because
+	// supported workflows commit this file. Trusted plugin commands live in
+	// .beads/config.local.yaml, user-global config.yaml, or env vars.
 	BackendPluginCommand string   `json:"backend_plugin_command,omitempty"`
 	BackendPluginArgs    []string `json:"backend_plugin_args,omitempty"`
 
