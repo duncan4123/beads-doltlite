@@ -207,6 +207,14 @@ type Config struct {
 	Database       string // Database name within Dolt (default: "beads")
 	ReadOnly       bool   // Open in read-only mode (skip schema init)
 
+	// LenientOpen opens the store leniently: embedded mode only. A migration
+	// gate refusal (#4259) or a dirty-working-set refusal (#4566) skips the
+	// migration instead of failing the open. Set for working-set-reconcile
+	// commands (bd dolt commit, bd vc commit; #4566), whose entire purpose is
+	// to clear the working set that the migration would otherwise refuse to
+	// touch. Ignored in server mode.
+	LenientOpen bool
+
 	// Server connection options
 	ServerSocket   string // Unix domain socket path (overrides Host/Port when set)
 	ServerHost     string // Server host (default: 127.0.0.1)
@@ -243,6 +251,14 @@ type Config struct {
 	// ServerHost/Port/Socket/User. Set by the store factory based on
 	// metadata.json dolt_mode=proxied-server.
 	ProxiedServer bool
+
+	// Gateway indicates the server is an authenticating gateway server: a credential
+	// command supplies a short-lived token as the connection username. bd treats such a
+	// server as owning database routing and schema, so it connects with the project
+	// database, skips the no-database admin probe, and never issues SHOW DATABASES /
+	// CREATE DATABASE or schema DDL (drift check only, like ReadOnly). Set by
+	// ApplyGatewayCredential, never by hand.
+	Gateway bool
 
 	// AutoStart enables transparent server auto-start when connection fails.
 	// When true and the host is localhost, bd will start a dolt sql-server
@@ -1125,9 +1141,16 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 		return nil, err
 	}
 
+	// Close the pool on any failure path below; cleared once ownership passes to the caller.
+	storeReady := false
+	defer func() {
+		if !storeReady {
+			_ = db.Close()
+		}
+	}()
+
 	// Test connection
 	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping Dolt database: %w", err)
 	}
 
@@ -1161,10 +1184,13 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	// would fail with cryptic unknown-column errors instead of a clear
 	// "upgrade bd" message (the stale-binary incident behind #4135/#4137).
 	if err := schema.CheckForwardDrift(ctx, db); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
-	if !cfg.ReadOnly {
+	// A gateway server owns the schema: it provisions each project at its deployed bd
+	// version, so a client must never run migrations (DDL) against it. Treat it like
+	// ReadOnly for schema — the forward-drift guard above still protects a stale client
+	// binary.
+	if !cfg.ReadOnly && !cfg.Gateway {
 		if err := store.initSchema(ctx); err != nil {
 			return nil, fmt.Errorf("failed to initialize schema: %w", err)
 		}
@@ -1178,7 +1204,6 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 			verifyErr = store.verifyProjectIdentity(ctx, cfg.BeadsDir)
 		}
 		if verifyErr != nil {
-			_ = db.Close()
 			return nil, verifyErr
 		}
 	}
@@ -1199,6 +1224,9 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	// These report sql.DB.Stats() on each OTel scrape — no-op when telemetry is off.
 	store.registerPoolGauges()
 
+	// Ownership of db transfers to the returned store; suppress the deferred
+	// close above. Must be the last thing before the success return.
+	storeReady = true
 	return store, nil
 }
 
@@ -1413,19 +1441,39 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, er
 	// pairs in dolt-server.log).
 	applyPoolLimits(db, cfg)
 
+	// Close the pool on any failure path below; cleared at the success return.
+	connReady := false
+	defer func() {
+		if !connReady {
+			_ = db.Close()
+		}
+	}()
+
+	// A gateway server owns database routing and existence, so bd does not probe or create
+	// it: skip the no-database admin connection (and the SHOW DATABASES / CREATE DATABASE
+	// it would run) and verify the project connection directly — a successful connect IS
+	// the existence proof. connReady must be set before returning the pool, or the defer
+	// above would close the *sql.DB we just handed the caller.
+	if cfg.Gateway {
+		if err := db.PingContext(ctx); err != nil {
+			return nil, "", fmt.Errorf("failed to connect to gateway server %s:%d (database %q): %w",
+				cfg.ServerHost, cfg.ServerPort, cfg.Database, err)
+		}
+		connReady = true
+		return db, connStr, nil
+	}
+
 	// Ensure database exists (may need to create it)
 	// First connect without database to create it
 	initConnStr := buildServerDSN(cfg, "")
 	initDB, err := sql.Open("mysql", initConnStr)
 	if err != nil {
-		_ = db.Close()
 		return nil, "", fmt.Errorf("failed to open init connection: %w", err)
 	}
 	defer func() { _ = initDB.Close() }()
 
 	// Validate database name to prevent SQL injection via backtick escaping
 	if err := ValidateDatabaseName(cfg.Database); err != nil {
-		_ = db.Close()
 		return nil, "", fmt.Errorf("invalid database name %q: %w", cfg.Database, err)
 	}
 
@@ -1433,7 +1481,6 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, er
 	// This is the last line of defense against test pollution (Clown Shows #12-#18).
 	// Pattern-based, not env-var-based — env vars can be misconfigured or missing.
 	if isTestDatabaseName(cfg.Database) && cfg.ServerPort == DefaultSQLPort {
-		_ = db.Close()
 		return nil, "", fmt.Errorf(
 			"REFUSED: will not CREATE DATABASE %q on production port %d — "+
 				"this is a test database name on the production server (see DOLT-WAR-ROOM.md)",
@@ -1450,14 +1497,12 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, er
 	// match unrelated databases with LIKE.
 	dbExists, checkErr := databaseExistsOnServer(ctx, initDB, cfg.Database)
 	if checkErr != nil {
-		_ = db.Close()
 		return nil, "", fmt.Errorf("failed to check if database %q exists on server %s:%d: %w",
 			cfg.Database, cfg.ServerHost, cfg.ServerPort, checkErr)
 	}
 
 	if !dbExists {
 		if !cfg.CreateIfMissing {
-			_ = db.Close()
 			return nil, "", databaseNotFoundError(cfg)
 		}
 
@@ -1466,7 +1511,6 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, er
 			// Dolt may return error 1007 even with IF NOT EXISTS - ignore if database already exists
 			errLower := strings.ToLower(err.Error())
 			if !strings.Contains(errLower, "database exists") && !strings.Contains(errLower, "1007") {
-				_ = db.Close()
 				// Check for connection refused - server likely not running
 				if strings.Contains(errLower, "connection refused") || strings.Contains(errLower, "connect: connection refused") {
 					return nil, "", fmt.Errorf("failed to connect to Dolt server at %s:%d: %w\n\nThe Dolt server may not be running. Try:\n  bd dolt start    # Start a local server\n  gt dolt start    # If using an orchestrator",
@@ -1496,10 +1540,10 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, er
 		}
 		return nil
 	}, backoff.WithContext(bo, ctx)); err != nil {
-		_ = db.Close()
 		return nil, "", fmt.Errorf("database %q not available after CREATE DATABASE: %w", cfg.Database, err)
 	}
 
+	connReady = true
 	return db, connStr, nil
 }
 

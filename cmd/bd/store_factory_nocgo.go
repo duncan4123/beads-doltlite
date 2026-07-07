@@ -5,11 +5,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	"github.com/steveyegge/beads/internal/storage/dolt"
+	beadsmysql "github.com/steveyegge/beads/internal/storage/mysql"
+	"github.com/steveyegge/beads/internal/storage/postgres"
+	beadssqlite "github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage/uowstore"
 )
 
 func usesSQLServer() bool {
@@ -21,7 +26,26 @@ func isEmbeddedMode() bool {
 	return false
 }
 
+// spikeUOWStore mirrors the cgo build's flag (see store_factory.go). Kept in
+// both build tags so main.go compiles either way; behavior default-off.
+func spikeUOWStore() bool {
+	return os.Getenv("BD_SPIKE_UOWSTORE") == "1"
+}
+
+// newSpikeUOWStore builds the spike uowstore adapter over a proxied-server UOW
+// provider for beadsDir (issue #4547 Route A derisk).
+func newSpikeUOWStore(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
+	provider, err := newProxiedServerUOWProvider(ctx, beadsDir)
+	if err != nil {
+		return nil, fmt.Errorf("spike uowstore: open uow provider: %w", err)
+	}
+	return uowstore.New(provider, getActor()), nil
+}
+
 func usesProxiedServer() bool {
+	if spikeUOWStore() {
+		return false
+	}
 	if shouldUseGlobals() {
 		return proxiedServerMode
 	}
@@ -30,6 +54,9 @@ func usesProxiedServer() bool {
 
 func newDoltStore(ctx context.Context, cfg *dolt.Config) (storage.DoltStorage, error) {
 	if cfg.ProxiedServer {
+		if spikeUOWStore() {
+			return newSpikeUOWStore(ctx, cfg.BeadsDir)
+		}
 		// TODO: this should not be a store
 		// it should be a uow provider
 		return nil, fmt.Errorf("proxy server store should be uow provider")
@@ -48,7 +75,22 @@ func acquireEmbeddedLock(_ string, _ bool) (util.Unlocker, error) {
 // newDoltStoreFromConfig creates a SQL-server-backed storage backend from config.
 func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
+	if err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendPostgres {
+		// Postgres needs no CGO (pure-Go pgx), so it works in the nocgo build too.
+		return postgres.NewFromConfig(ctx, beadsDir)
+	}
+	if err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendMySQL {
+		// MySQL (go-sql-driver) needs no CGO either.
+		return beadsmysql.NewFromConfig(ctx, beadsDir)
+	}
+	if err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendSQLite {
+		// SQLite (modernc.org/sqlite) is pure-Go; no CGO.
+		return beadssqlite.NewFromConfig(ctx, beadsDir)
+	}
 	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
+		if spikeUOWStore() {
+			return newSpikeUOWStore(ctx, beadsDir)
+		}
 		// TODO: this needs to be uow provider
 		return nil, fmt.Errorf("proxy server store should be uow provider")
 		// 	return newProxiedServerStore(ctx, &dolt.Config{
@@ -66,7 +108,19 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltS
 // newReadOnlyStoreFromConfig creates a read-only SQL-server-backed storage backend.
 func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
 	cfg, err := configfile.Load(beadsDir)
+	if err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendPostgres {
+		return postgres.NewFromConfig(ctx, beadsDir)
+	}
+	if err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendMySQL {
+		return beadsmysql.NewFromConfig(ctx, beadsDir)
+	}
+	if err == nil && cfg != nil && cfg.GetBackend() == configfile.BackendSQLite {
+		return beadssqlite.NewFromConfig(ctx, beadsDir)
+	}
 	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
+		if spikeUOWStore() {
+			return newSpikeUOWStore(ctx, beadsDir)
+		}
 		// TODO: this needs to be uow provider
 		return nil, fmt.Errorf("proxy server store needs to be uow provider")
 		// return newProxiedServerStore(ctx, &dolt.Config{

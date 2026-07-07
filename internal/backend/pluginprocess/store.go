@@ -307,6 +307,14 @@ func (t *transactionStore) SearchIssues(ctx context.Context, query string, filte
 	return out, nil
 }
 
+func (t *transactionStore) SearchIssueIDs(ctx context.Context, query string, filter types.IssueFilter) ([]string, error) {
+	var out []string
+	if err := t.client.request(ctx, "tx_search_issue_ids", searchIssuesParams{SessionID: t.txID, Query: query, Filter: filter}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (t *transactionStore) AddDependency(ctx context.Context, dep *types.Dependency, actor string) error {
 	return t.AddDependencyWithOptions(ctx, dep, actor, storage.DependencyAddOptions{})
 }
@@ -442,6 +450,14 @@ func (s *Store) GetIssuesByIDs(ctx context.Context, ids []string) ([]*types.Issu
 func (s *Store) SearchIssues(ctx context.Context, query string, filter types.IssueFilter) ([]*types.Issue, error) {
 	var out []*types.Issue
 	if err := s.client.request(ctx, "search_issues", searchIssuesParams{SessionID: s.sessionID, Query: query, Filter: filter}, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) SearchIssueIDs(ctx context.Context, query string, filter types.IssueFilter) ([]string, error) {
+	var out []string
+	if err := s.client.request(ctx, "search_issue_ids", searchIssuesParams{SessionID: s.sessionID, Query: query, Filter: filter}, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

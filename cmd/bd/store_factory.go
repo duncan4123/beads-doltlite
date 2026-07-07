@@ -17,7 +17,32 @@ import (
 	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
+	beadsmysql "github.com/steveyegge/beads/internal/storage/mysql"
+	"github.com/steveyegge/beads/internal/storage/postgres"
+	beadssqlite "github.com/steveyegge/beads/internal/storage/sqlite"
+	"github.com/steveyegge/beads/internal/storage/uowstore"
 )
+
+// spikeUOWStore reports whether the BD_SPIKE_UOWSTORE derisk spike is enabled
+// (issue gastownhall/beads#4547, Route A). When set, the proxied-server arms
+// below return a uowstore adapter (storage.DoltStorage over the uow stack)
+// instead of the "should be uow provider" error, and the CLI routes commands
+// through the normal store path rather than the *_proxied_server.go duals.
+// Default (unset) behavior is byte-identical to before.
+func spikeUOWStore() bool {
+	return os.Getenv("BD_SPIKE_UOWSTORE") == "1"
+}
+
+// newSpikeUOWStore builds the spike uowstore adapter over a proxied-server UOW
+// provider for beadsDir. Reused by every proxied factory arm so the spike store
+// is constructed exactly one way.
+func newSpikeUOWStore(ctx context.Context, beadsDir string) (storage.DoltStorage, error) {
+	provider, err := newProxiedServerUOWProvider(ctx, beadsDir)
+	if err != nil {
+		return nil, fmt.Errorf("spike uowstore: open uow provider: %w", err)
+	}
+	return uowstore.New(provider, getActor()), nil
+}
 
 func usesSQLServer() bool {
 	if shouldUseGlobals() {
@@ -39,6 +64,12 @@ func isEmbeddedMode() bool {
 }
 
 func usesProxiedServer() bool {
+	// BD_SPIKE_UOWSTORE (issue #4547 Route A derisk): route commands through the
+	// ordinary store path (backed by the uowstore adapter) instead of the
+	// *_proxied_server.go duals, so the spike store is what actually runs.
+	if spikeUOWStore() {
+		return false
+	}
 	if shouldUseGlobals() {
 		return proxiedServerMode
 	}
@@ -49,6 +80,9 @@ func usesProxiedServer() bool {
 // Used by bd init and PersistentPreRun.
 func newDoltStore(ctx context.Context, cfg *dolt.Config) (storage.DoltStorage, error) {
 	if cfg.ProxiedServer {
+		if spikeUOWStore() {
+			return newSpikeUOWStore(ctx, cfg.BeadsDir)
+		}
 		// TODO: this should not be a store
 		// it should be a uow provider
 		return nil, fmt.Errorf("proxy server store should be uow provider")
@@ -61,6 +95,13 @@ func newDoltStore(ctx context.Context, cfg *dolt.Config) (storage.DoltStorage, e
 		// remote-migrate gate (bd-578h9.5); server mode's ReadOnly opens
 		// already skip migration entirely.
 		return embeddeddolt.OpenForReadOnlyCommand(ctx, cfg.BeadsDir, cfg.Database, "main")
+	}
+	if cfg.LenientOpen {
+		// Working-set-reconcile commands (bd dolt commit, bd vc commit) must
+		// not be bricked by a pending-migration dirty-table refusal: that
+		// refusal's documented recovery is exactly the commit these commands
+		// run, so failing the open here would deadlock (#4566).
+		return embeddeddolt.OpenForWorkingSetReconcile(ctx, cfg.BeadsDir, cfg.Database, "main")
 	}
 	return embeddeddolt.Open(ctx, cfg.BeadsDir, cfg.Database, "main")
 }
@@ -103,25 +144,38 @@ func newDoltStoreFromConfig(ctx context.Context, beadsDir string) (storage.DoltS
 		if err != nil {
 			return nil, err
 		}
-		if pluginCfg == nil {
-			return nil, fmt.Errorf("backend plugin %q is configured in metadata.json but no trusted local command was found; run 'bd backend install %s --command <path>' or set BEADS_BACKEND_PLUGIN_COMMAND", providerName, providerName)
+		if pluginCfg != nil {
+			return pluginprocess.Open(ctx, pluginprocess.OpenOptions{
+				Config: pluginprocess.Config{
+					Backend: providerName,
+					Command: pluginCfg.Command,
+					Args:    pluginCfg.Args,
+				},
+				BeadsDir: beadsDir,
+				Database: cfg.GetDoltDatabase(),
+				Branch:   "main",
+			})
 		}
-		return pluginprocess.Open(ctx, pluginprocess.OpenOptions{
-			Config: pluginprocess.Config{
-				Backend: providerName,
-				Command: pluginCfg.Command,
-				Args:    pluginCfg.Args,
-			},
-			BeadsDir: beadsDir,
-			Database: cfg.GetDoltDatabase(),
-			Branch:   "main",
-		})
+		if err == nil && cfg != nil {
+			switch providerName {
+			case configfile.BackendPostgres:
+				return postgres.NewFromConfig(ctx, beadsDir)
+			case configfile.BackendMySQL:
+				return beadsmysql.NewFromConfig(ctx, beadsDir)
+			case configfile.BackendSQLite:
+				return beadssqlite.NewFromConfig(ctx, beadsDir)
+			}
+		}
+		return nil, fmt.Errorf("backend plugin %q is configured in metadata.json but no trusted local command was found; run 'bd backend install %s --command <path>' or set BEADS_BACKEND_PLUGIN_COMMAND", providerName, providerName)
 	}
 	provider, lookupErr := backend.MustLookup(providerName)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
 	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
+		if spikeUOWStore() {
+			return newSpikeUOWStore(ctx, beadsDir)
+		}
 		// TODO: this needs to be uow provider
 		return nil, fmt.Errorf("proxy server store should be uow provider")
 		// 	return newProxiedServerStore(ctx, &dolt.Config{
@@ -214,26 +268,42 @@ func newReadOnlyStoreFromConfig(ctx context.Context, beadsDir string) (storage.D
 		if err != nil {
 			return nil, err
 		}
-		if pluginCfg == nil {
-			return nil, fmt.Errorf("backend plugin %q is configured in metadata.json but no trusted local command was found; run 'bd backend install %s --command <path>' or set BEADS_BACKEND_PLUGIN_COMMAND", providerName, providerName)
+		if pluginCfg != nil {
+			return pluginprocess.Open(ctx, pluginprocess.OpenOptions{
+				Config: pluginprocess.Config{
+					Backend: providerName,
+					Command: pluginCfg.Command,
+					Args:    pluginCfg.Args,
+				},
+				BeadsDir: beadsDir,
+				Database: cfg.GetDoltDatabase(),
+				Branch:   "main",
+				ReadOnly: true,
+			})
 		}
-		return pluginprocess.Open(ctx, pluginprocess.OpenOptions{
-			Config: pluginprocess.Config{
-				Backend: providerName,
-				Command: pluginCfg.Command,
-				Args:    pluginCfg.Args,
-			},
-			BeadsDir: beadsDir,
-			Database: cfg.GetDoltDatabase(),
-			Branch:   "main",
-			ReadOnly: true,
-		})
+		if err == nil && cfg != nil {
+			switch providerName {
+			case configfile.BackendPostgres:
+				// Postgres has no read-only open mode in the wedge; a normal open is fine
+				// (reads don't mutate, and search_path is per-workspace).
+				return postgres.NewFromConfig(ctx, beadsDir)
+			case configfile.BackendMySQL:
+				// MySQL likewise has no separate read-only open in the wedge; reads don't mutate.
+				return beadsmysql.NewFromConfig(ctx, beadsDir)
+			case configfile.BackendSQLite:
+				return beadssqlite.NewFromConfig(ctx, beadsDir)
+			}
+		}
+		return nil, fmt.Errorf("backend plugin %q is configured in metadata.json but no trusted local command was found; run 'bd backend install %s --command <path>' or set BEADS_BACKEND_PLUGIN_COMMAND", providerName, providerName)
 	}
 	provider, lookupErr := backend.MustLookup(providerName)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
 	if err == nil && cfg != nil && cfg.IsDoltProxiedServerMode() {
+		if spikeUOWStore() {
+			return newSpikeUOWStore(ctx, beadsDir)
+		}
 		// TODO: this needs to be uow provider
 		return nil, fmt.Errorf("proxy server store needs to be uow provider")
 		// return newProxiedServerStore(ctx, &dolt.Config{

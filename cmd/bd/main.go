@@ -127,6 +127,7 @@ var readOnlyCommands = map[string]bool{
 	"blocked":    true,
 	"count":      true,
 	"search":     true,
+	"query":      true,
 	"graph":      true,
 	"duplicates": true,
 	"comments":   true, // list comments (not add)
@@ -141,6 +142,25 @@ var readOnlyCommands = map[string]bool{
 // that would trigger file watchers. See GH#804.
 func isReadOnlyCommand(cmdName string) bool {
 	return readOnlyCommands[cmdName]
+}
+
+// isWorkingSetReconcileCommand reports whether cmd's whole purpose is to
+// reconcile the Dolt working set: "bd dolt commit" or "bd vc commit". These
+// commands are the documented recovery from a pending-migration dirty-table
+// refusal, but they also open the store, and an open runs the migration -
+// hitting that same refusal before the commit that would clear the dirty
+// state ever runs. Opening leniently (embeddeddolt.OpenForWorkingSetReconcile)
+// breaks that deadlock by skipping the migration instead of failing the open
+// (gastownhall/beads#4566).
+func isWorkingSetReconcileCommand(cmd *cobra.Command) bool {
+	if cmd.Name() != "commit" {
+		return false
+	}
+	parent := cmd.Parent()
+	if parent == nil {
+		return false
+	}
+	return parent.Name() == "dolt" || parent.Name() == "vc"
 }
 
 // loadBeadsEnvFile loads .beads/.env into process environment for per-project
@@ -896,7 +916,9 @@ var rootCmd = &cobra.Command{
 
 		if dbPath == "" {
 			if bd := beads.FindBeadsDir(); bd != "" {
-				if cfg, _ := configfile.Load(bd); cfg != nil && cfg.IsDoltProxiedServerMode() {
+				if cfg, _ := configfile.Load(bd); cfg != nil && (cfg.IsDoltProxiedServerMode() || cfg.GetBackend() != configfile.BackendDolt) {
+					// A non-Dolt backend (or proxied-server) workspace may have no local Dolt
+					// database file; the .beads dir with metadata.json IS the workspace.
 					dbPath = bd
 				}
 			}
@@ -986,8 +1008,9 @@ var rootCmd = &cobra.Command{
 		// on a different filesystem (e.g., ext4 for performance on WSL).
 		doltPath := doltserver.ResolveDoltDir(beadsDir)
 		doltCfg := &dolt.Config{
-			ReadOnly: useReadOnly,
-			BeadsDir: beadsDir,
+			ReadOnly:    useReadOnly,
+			BeadsDir:    beadsDir,
+			LenientOpen: isWorkingSetReconcileCommand(cmd),
 		}
 
 		// Load config to get database name and server connection settings
@@ -1028,7 +1051,20 @@ var rootCmd = &cobra.Command{
 			// config.yaml). Port 0 is fine here — auto-start will resolve it.
 			doltCfg.ServerPort = doltserver.DefaultConfig(beadsDir).Port
 			doltCfg.ServerSocket = cfg.GetDoltServerSocket()
-			doltCfg.ServerUser = cfg.GetDoltServerUser()
+			// A configured credential command targets an authenticating gateway server:
+			// run it for a short-lived token used as the connection username. Fail closed
+			// — never fall back to the static/root user when a command was configured but
+			// failed. Mirrors applyResolvedConfig, which this hand-built doltCfg path
+			// bypasses. Server mode only: embedded stores never present a username, so the
+			// command must not run (or fail) embedded opens even when the env var is set.
+			if doltCfg.ServerMode {
+				if _, credErr := dolt.ApplyGatewayCredential(rootCtx, cfg, doltCfg); credErr != nil {
+					return HandleError("resolving dolt credential command: %v", credErr)
+				}
+			}
+			if doltCfg.ServerUser == "" {
+				doltCfg.ServerUser = cfg.GetDoltServerUser()
+			}
 			// Use the resolved port for credential lookup — metadata.json port
 			// and runtime port can diverge (e.g., tunnel on 3308 vs local on 3307).
 			doltCfg.ServerPassword = cfg.GetDoltServerPasswordForPort(doltCfg.ServerPort)
@@ -1080,7 +1116,13 @@ var rootCmd = &cobra.Command{
 		// other helper paths stay in lockstep with the main command path.
 		dolt.ApplyCLIAutoStart(beadsDir, doltCfg)
 
-		if proxiedServerMode {
+		// BD_SPIKE_UOWSTORE (issue #4547 Route A derisk): in proxied mode the CLI
+		// normally short-circuits to the uowProvider path and dispatches through
+		// the *_proxied_server.go duals. With the spike flag set we instead fall
+		// through to newDoltStore, which returns a uowstore adapter, so commands
+		// travel the ordinary store path — exercising exactly the adapter this
+		// spike is proving. Default (unset) keeps the original short-circuit.
+		if proxiedServerMode && !spikeUOWStore() {
 			p, err := newProxiedServerUOWProvider(rootCtx, beadsDir)
 			if err != nil {
 				return HandleError("failed to open uow provider: %v", err)
@@ -1229,58 +1271,70 @@ var rootCmd = &cobra.Command{
 				uowProvider = nil
 			}
 		} else {
-			// Dolt auto-commit: after a successful write command (and after final flush),
-			// create a Dolt commit so changes don't remain only in the working set.
-			if commandDidWrite.Load() && !commandDidExplicitDoltCommit {
-				if err := maybeAutoCommit(rootCtx, doltAutoCommitParams{Command: cmd.Name()}); err != nil {
-					return HandleError("dolt auto-commit failed: %v", err)
-				}
+			// Slice 5c: a NonCommitGraphBackend (Postgres, SQLite, ...) has no Dolt
+			// commit graph, so skip the Dolt-only maintenance tail. UnwrapStore reaches
+			// the concrete store past the HookFiringStore decorator; a store WITHOUT the
+			// marker (every Dolt variant) leaves skipMaintenance false and runs the tail
+			// unchanged. store.Close below stays unconditional.
+			skipMaintenance := false
+			if ncg, ok := storage.UnwrapStore(store).(storage.NonCommitGraphBackend); ok && ncg.CommitGraphUnsupported() {
+				skipMaintenance = true
 			}
 
-			// Tip metadata auto-commit: if a tip was shown, create a separate Dolt commit for the
-			// tip_*_last_shown metadata updates. This may happen even for otherwise read-only commands.
-			if commandDidWriteTipMetadata && len(commandTipIDsShown) > 0 {
-				// Only applies when dolt auto-commit is enabled and backend is versioned (Dolt).
-				if mode, err := getDoltAutoCommitMode(); err != nil {
-					return HandleError("dolt tip auto-commit failed: %v", err)
-				} else if mode == doltAutoCommitOn {
-					// Apply tip metadata writes now (deferred in recordTipShown for Dolt).
-					for tipID := range commandTipIDsShown {
-						key := fmt.Sprintf("tip_%s_last_shown", tipID)
-						value := time.Now().Format(time.RFC3339)
-						if err := store.SetLocalMetadata(rootCtx, key, value); err != nil {
+			if !skipMaintenance {
+				// Dolt auto-commit: after a successful write command (and after final flush),
+				// create a Dolt commit so changes don't remain only in the working set.
+				if commandDidWrite.Load() && !commandDidExplicitDoltCommit {
+					if err := maybeAutoCommit(rootCtx, doltAutoCommitParams{Command: cmd.Name()}); err != nil {
+						return HandleError("dolt auto-commit failed: %v", err)
+					}
+				}
+
+				// Tip metadata auto-commit: if a tip was shown, create a separate Dolt commit for the
+				// tip_*_last_shown metadata updates. This may happen even for otherwise read-only commands.
+				if commandDidWriteTipMetadata && len(commandTipIDsShown) > 0 {
+					// Only applies when dolt auto-commit is enabled and backend is versioned (Dolt).
+					if mode, err := getDoltAutoCommitMode(); err != nil {
+						return HandleError("dolt tip auto-commit failed: %v", err)
+					} else if mode == doltAutoCommitOn {
+						// Apply tip metadata writes now (deferred in recordTipShown for Dolt).
+						for tipID := range commandTipIDsShown {
+							key := fmt.Sprintf("tip_%s_last_shown", tipID)
+							value := time.Now().Format(time.RFC3339)
+							if err := store.SetLocalMetadata(rootCtx, key, value); err != nil {
+								return HandleError("dolt tip auto-commit failed: %v", err)
+							}
+						}
+
+						ids := make([]string, 0, len(commandTipIDsShown))
+						for tipID := range commandTipIDsShown {
+							ids = append(ids, tipID)
+						}
+						msg := formatDoltAutoCommitMessage("tip", getActor(), ids)
+						if err := maybeAutoCommit(rootCtx, doltAutoCommitParams{Command: "tip", MessageOverride: msg}); err != nil {
 							return HandleError("dolt tip auto-commit failed: %v", err)
 						}
 					}
+				}
 
-					ids := make([]string, 0, len(commandTipIDsShown))
-					for tipID := range commandTipIDsShown {
-						ids = append(ids, tipID)
-					}
-					msg := formatDoltAutoCommitMessage("tip", getActor(), ids)
-					if err := maybeAutoCommit(rootCtx, doltAutoCommitParams{Command: "tip", MessageOverride: msg}); err != nil {
-						return HandleError("dolt tip auto-commit failed: %v", err)
+				// Auto-backup: sync a Dolt-native backup if enabled and due
+				maybeAutoBackup(rootCtx)
+
+				// Auto-export: write git-tracked JSONL for portability if enabled and due.
+				// Read-only commands must not perform post-run maintenance writes or emit
+				// sync guidance after machine-readable output.
+				if shouldRunPostCommandAutoExport(cmd) {
+					if err := maybeAutoExport(rootCtx, commandAllowsEmptyAutoExport(cmd)); err != nil {
+						return HandleError("%v", err)
 					}
 				}
-			}
 
-			// Auto-backup: sync a Dolt-native backup if enabled and due
-			maybeAutoBackup(rootCtx)
-
-			// Auto-export: write git-tracked JSONL for portability if enabled and due.
-			// Read-only commands must not perform post-run maintenance writes or emit
-			// sync guidance after machine-readable output.
-			if shouldRunPostCommandAutoExport(cmd) {
-				if err := maybeAutoExport(rootCtx, commandAllowsEmptyAutoExport(cmd)); err != nil {
-					return HandleError("%v", err)
+				// Auto-push: push to Dolt remote if enabled and due.
+				// Skip for read-only commands to avoid unnecessary network operations
+				// and metadata writes on commands like bd list/show/ready (GH#2191).
+				if !isReadOnlyCommand(cmd.Name()) {
+					maybeAutoPush(rootCtx)
 				}
-			}
-
-			// Auto-push: push to Dolt remote if enabled and due.
-			// Skip for read-only commands to avoid unnecessary network operations
-			// and metadata writes on commands like bd list/show/ready (GH#2191).
-			if !isReadOnlyCommand(cmd.Name()) {
-				maybeAutoPush(rootCtx)
 			}
 
 			// Signal that store is closing (prevents background flush from accessing closed store)

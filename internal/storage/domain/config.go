@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -39,6 +40,7 @@ type ConfigUseCase interface {
 	SetConfig(ctx context.Context, key, value string) error
 	DeleteConfig(ctx context.Context, key string) error
 	GetAllConfig(ctx context.Context) (map[string]string, error)
+	GetMetadata(ctx context.Context, key string) (string, error)
 }
 
 // CreateContext bundles the read-only config inputs that bd create needs
@@ -128,6 +130,22 @@ func (u *configUseCaseImpl) GetInfraTypes(ctx context.Context) (map[string]bool,
 	if err != nil {
 		return nil, fmt.Errorf("GetInfraTypes: %w", err)
 	}
+	// The repo returns only the DB `types.infra` config; an unset/empty value
+	// yields an empty map. Embedded resolves the same way but then falls back to
+	// config.yaml and finally the hardcoded defaults (["agent","role","message"])
+	// via issueops.ResolveInfraTypesInTx / DoltStore.GetInfraTypes. Reproduce that
+	// fallback here so `-t message` auto-routes to ephemeral on this seam exactly
+	// as on the embedded store, instead of being treated as a plain type (#4547 F-3).
+	if len(out) == 0 {
+		typeList := config.GetInfraTypesFromYAML()
+		if len(typeList) == 0 {
+			typeList = DefaultInfraTypes()
+		}
+		out = make(map[string]bool, len(typeList))
+		for _, t := range typeList {
+			out[t] = true
+		}
+	}
 	return out, nil
 }
 
@@ -143,6 +161,14 @@ func (u *configUseCaseImpl) GetConfig(ctx context.Context, key string) (string, 
 	out, err := u.cfgRepo.GetConfig(ctx, key)
 	if err != nil {
 		return "", fmt.Errorf("GetConfig: %w", err)
+	}
+	return out, nil
+}
+
+func (u *configUseCaseImpl) GetMetadata(ctx context.Context, key string) (string, error) {
+	out, err := u.cfgRepo.GetMetadata(ctx, key)
+	if err != nil {
+		return "", fmt.Errorf("GetMetadata: %w", err)
 	}
 	return out, nil
 }

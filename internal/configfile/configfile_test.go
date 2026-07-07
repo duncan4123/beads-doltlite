@@ -626,8 +626,9 @@ func TestProxiedServerClientInfo_ResolvedPaths(t *testing.T) {
 	})
 }
 
-// TestGetBackend tests that legacy backend names default to Dolt while
-// explicit plugin-capable backend names are preserved.
+// TestGetBackend verifies backend-name normalization. Empty legacy metadata
+// defaults to Dolt; explicit backend names are preserved for built-in SQL
+// backends and external backend plugins.
 func TestGetBackend(t *testing.T) {
 	tests := []struct {
 		name string
@@ -637,11 +638,11 @@ func TestGetBackend(t *testing.T) {
 		{name: "explicit dolt", cfg: &Config{Backend: BackendDolt}, want: BackendDolt},
 		{name: "empty backend", cfg: &Config{Backend: ""}, want: BackendDolt},
 		{name: "legacy config", cfg: &Config{}, want: BackendDolt},
-		{name: "stale sqlite value", cfg: &Config{Backend: "sqlite"}, want: BackendDolt},
+		{name: "sqlite backend", cfg: &Config{Backend: "sqlite"}, want: BackendSQLite},
 		{name: "normalizes case and whitespace", cfg: &Config{Backend: " DoltLite "}, want: "doltlite"},
 		{name: "plugin backend", cfg: &Config{Backend: "postgres"}, want: "postgres"},
+		{name: "unknown plugin-shaped backend", cfg: &Config{Backend: "mystery"}, want: "mystery"},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.cfg.GetBackend(); got != tt.want {
