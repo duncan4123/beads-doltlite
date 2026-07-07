@@ -12,9 +12,11 @@
 #   BEADS_PG_TEST_URL   postgres://user:pass@host:port/db   (enables the postgres backend)
 #   BEADS_PG_PASSWORD   optional, if the password is not in the URL
 #
-# Optional deep gate (bts-rs 523-scenario differential oracle; needs the bts-rs
-# checkout + ~50 min, so it is off by default and not part of the per-PR loop):
-#   CONFORMANCE_DEEP=1  BTS_RS_DIR=/path/to/bts-rs  ./scripts/conformance.sh
+# Optional deep gate (bts-rs differential oracle; uses the vendored harness by
+# default, or BTS_RS_DIR/BTS_CATALOG_FILE for the full enumerated catalog):
+#   CONFORMANCE_DEEP=1 ./scripts/conformance.sh
+#   CONFORMANCE_DEEP=1 BEADS_DEEP_ORACLE_BACKEND=doltlite-plugin \
+#     BEADS_DOLTLITE_PLUGIN_COMMAND=/path/to/bd-backend-doltlite ./scripts/conformance.sh
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -46,7 +48,7 @@ CGO_ENABLED=1 go test -tags "$TAGS" ./internal/storage/sqlite/ \
 CGO_ENABLED=1 go test -tags "$TAGS" ./internal/storage/sqlitedialect/
 
 echo "==> Tier 2: end-to-end 'bd init' + CLI conformance (differential vs Dolt)"
-CGO_ENABLED=1 go test -tags "$TAGS e2e" ./test/conformance/
+CGO_ENABLED=1 go test -tags "$TAGS e2e" ./test/conformance/ -timeout 90m
 
 if [[ "${CONFORMANCE_DEEP:-0}" == "1" ]]; then
   echo "==> Deep: bts-rs 523-scenario differential oracle"

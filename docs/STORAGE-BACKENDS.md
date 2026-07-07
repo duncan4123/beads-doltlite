@@ -272,6 +272,47 @@ BEADS_MYSQL_TEST_URL="user:pass@tcp(127.0.0.1:3306)/" \
 ./scripts/conformance.sh
 ```
 
+External backend plugins can join the same Tier 2 oracle by installing
+themselves after `bd init`. For the DoltLite process plugin, build the plugin
+binary and run only that profile:
+
+```bash
+OUT=/tmp/bd-backend-doltlite-conformance \
+  /path/to/beads-backend-doltlite/scripts/build.sh
+
+BEADS_DOLTLITE_PLUGIN_COMMAND=/tmp/bd-backend-doltlite-conformance \
+BEADS_DOLTLITE_PLUGIN_ARGS=serve \
+BEADS_CONFORMANCE_PROFILES=doltlite-plugin \
+CGO_ENABLED=1 \
+go test -tags 'gms_pure_go e2e' ./test/conformance/ -timeout 90m -count=1
+```
+
+That run compares the plugin-backed DoltLite workspace against the embedded
+Dolt reference using the same `bd` CLI corpus. It currently takes about 15
+minutes on the development machine.
+
+The deeper bts-rs oracle can also run the DoltLite plugin as the candidate. It
+uses the vendored harness under `tests/oracle-a/harness` by default. The vendored
+copy always runs the curated scenarios; set `BTS_CATALOG_FILE` or `BTS_RS_DIR`
+when you want the full enumerated catalog as well:
+
+```bash
+OUT=/tmp/bd-backend-doltlite-conformance \
+  /path/to/beads-backend-doltlite/scripts/build.sh
+
+CONFORMANCE_DEEP=1 \
+BEADS_DEEP_ORACLE_BACKEND=doltlite-plugin \
+BEADS_DOLTLITE_PLUGIN_COMMAND=/tmp/bd-backend-doltlite-conformance \
+BEADS_DOLTLITE_PLUGIN_ARGS=serve \
+./scripts/conformance.sh
+```
+
+For a deep-only run, call `./scripts/run-oracle-p.sh` with the same backend
+environment. To make a run fail rather than silently skip the enumerated catalog,
+add `BEADS_DEEP_ORACLE_REQUIRE_CATALOG=1`. Set `BTS_RS_DIR=/path/to/bts-rs` only
+when you deliberately want to use an external harness checkout instead of the
+vendored copy.
+
 Adding a new backend is one declarative profile entry in `test/conformance/profiles.go` plus a store-factory arm; both tiers pick it up automatically.
 
 See [DOLT.md](DOLT.md) for the default backend, [CONFIG.md](CONFIG.md) for configuration, and [TROUBLESHOOTING.md](TROUBLESHOOTING.md) if a connection misbehaves.

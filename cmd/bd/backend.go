@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/steveyegge/beads/internal/backend/pluginprocess"
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/metrics"
@@ -118,6 +120,7 @@ func installBackendPlugin(beadsDir string, input backendInstallInput) (*backendI
 	if cfg == nil {
 		cfg = configfile.DefaultConfig()
 	}
+	prefix := currentIssuePrefix(beadsDir)
 	cfg.Backend = backend
 	if strings.TrimSpace(cfg.Database) == "" || cfg.Database == "beads.db" {
 		cfg.Database = backend
@@ -134,6 +137,20 @@ func installBackendPlugin(beadsDir string, input backendInstallInput) (*backendI
 	if err != nil {
 		return nil, err
 	}
+	if err := pluginprocess.Init(context.Background(), pluginprocess.InitOptions{
+		Config: pluginprocess.Config{
+			Backend: backend,
+			Command: resolvedCommand,
+			Args:    args,
+		},
+		BeadsDir: beadsDir,
+		Database: cfg.GetDoltDatabase(),
+		Branch:   "main",
+		Prefix:   prefix,
+		Actor:    "bd backend install",
+	}); err != nil {
+		return nil, fmt.Errorf("initializing backend plugin %q: %w", backend, err)
+	}
 
 	return &backendInstallResult{
 		Backend:      backend,
@@ -142,6 +159,20 @@ func installBackendPlugin(beadsDir string, input backendInstallInput) (*backendI
 		MetadataPath: configfile.ConfigPath(beadsDir),
 		TrustPath:    trustPath,
 	}, nil
+}
+
+func currentIssuePrefix(beadsDir string) string {
+	ctx := context.Background()
+	store, err := newDoltStoreFromConfig(ctx, beadsDir)
+	if err != nil {
+		return "bd"
+	}
+	defer store.Close()
+	prefix, err := store.GetConfig(ctx, "issue_prefix")
+	if err != nil || strings.TrimSpace(prefix) == "" {
+		return "bd"
+	}
+	return prefix
 }
 
 func saveBackendPluginTrust(beadsDir, backend, command string, args []string) (string, error) {

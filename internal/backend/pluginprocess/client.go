@@ -8,8 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/steveyegge/beads/internal/storage"
 )
 
 type Config struct {
@@ -103,7 +106,7 @@ func (c *Client) request(ctx context.Context, method string, params any, out any
 		if resp.Error == nil {
 			return fmt.Errorf("%s failed", method)
 		}
-		return fmt.Errorf("%s failed: %s: %s", method, resp.Error.Code, resp.Error.Message)
+		return pluginResponseError(method, resp.Error)
 	}
 	if out == nil {
 		return nil
@@ -115,6 +118,21 @@ func (c *Client) request(ctx context.Context, method string, params any, out any
 		return fmt.Errorf("decode %s response: %w", method, err)
 	}
 	return nil
+}
+
+func pluginResponseError(method string, err *protocolError) error {
+	code := strings.ToLower(strings.TrimSpace(err.Code))
+	msg := strings.TrimSpace(err.Message)
+	if msg == "" {
+		msg = strings.TrimSpace(err.Code)
+	}
+	if strings.Contains(code, "not_found") || strings.Contains(strings.ToLower(msg), "not found") {
+		return fmt.Errorf("%w: %s", storage.ErrNotFound, msg)
+	}
+	if strings.Contains(code, "prefix_mismatch") {
+		return fmt.Errorf("%w: %s", storage.ErrPrefixMismatch, msg)
+	}
+	return errors.New(msg)
 }
 
 func (c *Client) readHello(expectedBackend string) error {

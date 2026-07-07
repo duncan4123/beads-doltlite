@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/types"
 )
 
@@ -111,6 +114,9 @@ func TestPluginProcessHelper(t *testing.T) {
 		Result: mustJSON(hello{
 			Protocol: protocolVersion,
 			Backend:  "doltlite",
+			Capabilities: Capabilities{
+				RawSQL: true,
+			},
 		}),
 	}); err != nil {
 		panic(err)
@@ -181,4 +187,30 @@ func mustJSON(payload any) json.RawMessage {
 		panic(err)
 	}
 	return data
+}
+
+func TestPluginResponseErrorUsesDomainMessage(t *testing.T) {
+	err := pluginResponseError("add_dependency", &protocolError{
+		Code:    "add_dependency_failed",
+		Message: "adding dependency would create a cycle",
+	})
+	if got, want := err.Error(), "adding dependency would create a cycle"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "add_dependency") {
+		t.Fatalf("error leaked plugin method/code: %q", err)
+	}
+}
+
+func TestPluginResponseErrorPreservesSentinels(t *testing.T) {
+	err := pluginResponseError("get_issue", &protocolError{
+		Code:    "not_found",
+		Message: "issue bd-1 not found",
+	})
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("errors.Is(err, storage.ErrNotFound) = false for %v", err)
+	}
+	if strings.Contains(err.Error(), "get_issue") {
+		t.Fatalf("error leaked plugin method: %q", err)
+	}
 }

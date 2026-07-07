@@ -9,6 +9,7 @@ type Capabilities = backendplugin.Capabilities
 type request = backendplugin.Request
 type response = backendplugin.Response
 type protocolError = backendplugin.Error
+type initParams = backendplugin.InitParams
 type openParams = backendplugin.OpenParams
 type openResult = backendplugin.OpenResult
 type sessionParams = backendplugin.SessionParams

@@ -24,10 +24,41 @@ type OpenOptions struct {
 	ReadOnly bool
 }
 
+type InitOptions struct {
+	Config
+	BeadsDir string
+	Database string
+	Branch   string
+	Prefix   string
+	Actor    string
+}
+
 type Store struct {
 	client    *Client
 	sessionID string
 	closeOnce sync.Once
+}
+
+func Init(ctx context.Context, opts InitOptions) error {
+	client, err := Start(ctx, opts.Config)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	var opened openResult
+	if err := client.request(ctx, "init", initParams{
+		BeadsDir: opts.BeadsDir,
+		Database: opts.Database,
+		Branch:   opts.Branch,
+		Prefix:   opts.Prefix,
+		Actor:    opts.Actor,
+	}, &opened); err != nil {
+		return err
+	}
+	if opened.SessionID != "" {
+		_ = client.request(ctx, "close", sessionParams{SessionID: opened.SessionID}, nil)
+	}
+	return nil
 }
 
 func Open(ctx context.Context, opts OpenOptions) (*Store, error) {
@@ -102,6 +133,9 @@ func (s *Store) GetAllConfig(ctx context.Context) (map[string]string, error) {
 }
 
 func (s *Store) ExecuteRawSQL(ctx context.Context, query string) (storage.RawSQLResult, error) {
+	if !s.client.Hello().Capabilities.RawSQL {
+		return storage.RawSQLResult{}, errors.New("storage backend does not support raw DB access")
+	}
 	var out rawSQLResult
 	if err := s.client.request(ctx, "raw_sql", rawSQLParams{SessionID: s.sessionID, Query: query}, &out); err != nil {
 		return storage.RawSQLResult{}, err

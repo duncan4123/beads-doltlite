@@ -27,8 +27,12 @@ fn yes() -> bool {
 /// Non-deterministic ones (ID minting, ready-recency) are excluded — they're
 /// asserted via properties elsewhere, not byte-diff.
 pub fn catalog() -> Vec<Scenario> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/scenarios/enumerated.json");
+    let path = std::env::var("BTS_CATALOG_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/scenarios/enumerated.json")
+        });
     let data = match std::fs::read_to_string(&path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),

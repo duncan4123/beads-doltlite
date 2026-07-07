@@ -348,9 +348,19 @@ func runScenario(t *testing.T, bin string, p BackendProfile, sc scenario) []stri
 	if p.Env != nil {
 		env = p.Env(ws)
 	}
-	initArgs := append([]string{"init", "-p", "cf", "--quiet"}, p.InitArgs(ws)...)
+	initArgs := []string{"init", "-p", "cf", "--quiet"}
+	if p.InitArgs != nil {
+		initArgs = append(initArgs, p.InitArgs(ws)...)
+	}
 	if _, stderr, code := runBd(bin, ws.Dir, env, initArgs...); code != 0 {
 		t.Fatalf("[%s] bd init failed (exit %d): %s", p.Name, code, stderr)
+	}
+	if p.PostInitCommands != nil {
+		for _, args := range p.PostInitCommands(ws) {
+			if _, stderr, code := runBd(bin, ws.Dir, env, args...); code != 0 {
+				t.Fatalf("[%s] bd %s failed (exit %d): %s", p.Name, strings.Join(args, " "), code, stderr)
+			}
+		}
 	}
 
 	var results []string
