@@ -11,7 +11,10 @@
 // backends for the non-default profiles.
 package conformance
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 // Workspace is one isolated place a backend can be `bd init`-ed. Dir is the working
 // directory (its .beads/ is created by init); Handle is a backend-specific isolation
@@ -76,6 +79,35 @@ var Profiles = []BackendProfile{
 		Teardown: dropPostgresSchema,
 	},
 	{
+		Name: "postgres-plugin",
+		Available: func() bool {
+			return os.Getenv("BEADS_PG_TEST_URL") != "" && os.Getenv("BEADS_POSTGRES_PLUGIN_COMMAND") != ""
+		},
+		NewHandle: freshSchemaName,
+		InitArgs: func(ws *Workspace) []string {
+			return []string{
+				"--backend=postgres",
+				"--pg-url=" + os.Getenv("BEADS_PG_TEST_URL"),
+				"--pg-schema=" + ws.Handle,
+			}
+		},
+		Env: func(*Workspace) []string {
+			env := []string{
+				"BEADS_BACKEND_PLUGIN_COMMAND=" + os.Getenv("BEADS_POSTGRES_PLUGIN_COMMAND"),
+			}
+			if args := os.Getenv("BEADS_POSTGRES_PLUGIN_ARGS"); args != "" {
+				env = append(env, "BEADS_BACKEND_PLUGIN_ARGS="+args)
+			} else {
+				env = append(env, "BEADS_BACKEND_PLUGIN_ARGS=serve")
+			}
+			if pw := os.Getenv("BEADS_PG_PASSWORD"); pw != "" {
+				env = append(env, "BEADS_PG_PASSWORD="+pw)
+			}
+			return env
+		},
+		Teardown: dropPostgresSchema,
+	},
+	{
 		Name:      "mysql",
 		Available: func() bool { return os.Getenv("BEADS_MYSQL_TEST_URL") != "" },
 		NewHandle: freshSchemaName, // a valid MySQL database name
@@ -115,9 +147,28 @@ func Reference() BackendProfile {
 // Candidates returns the non-reference profiles that are available here.
 func Candidates() []BackendProfile {
 	var out []BackendProfile
+	filter := profileFilter()
 	for _, p := range Profiles {
+		if len(filter) > 0 && !filter[p.Name] {
+			continue
+		}
 		if !p.Reference && p.Available != nil && p.Available() {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func profileFilter() map[string]bool {
+	raw := strings.TrimSpace(os.Getenv("BEADS_CONFORMANCE_PROFILES"))
+	if raw == "" {
+		return nil
+	}
+	out := make(map[string]bool)
+	for _, item := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(item)
+		if name != "" {
+			out[name] = true
 		}
 	}
 	return out
